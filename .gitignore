@@ -1,0 +1,4 @@
+build/
+*.rbxm
+*.rbxmx
+.DS_Store
