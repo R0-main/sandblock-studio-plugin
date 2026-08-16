@@ -1,6 +1,9 @@
 {
   "name": "SandblockStudioPlugin",
   "tree": {
-    "$path": "src"
+    "$path": "src",
+    "Rojo": {
+      "$path": "vendor/rojo/SandblockRojoAdapter.rbxm"
+    }
   }
 }

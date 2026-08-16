@@ -1,0 +1,15 @@
+{
+  "name": "Sandblock Studio Plugin Dev",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "SandblockStudioPlugin": {
+        "$path": "src",
+        "Rojo": {
+          "$path": "vendor/rojo/SandblockRojoAdapter.rbxm"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
 build/
 *.rbxm
 *.rbxmx
+!vendor/rojo/SandblockRojoAdapter.rbxm
 .DS_Store
