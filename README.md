@@ -35,19 +35,37 @@ components.
 | Rojo UI capability | Sandblock component |
 | --- | --- |
 | Bordered container and sliced surface | `Surface`, `BorderedContainer`, `SlicedImage` |
-| Text and icon actions with touch feedback | `Button`, `TextButton`, `IconButton` |
-| Checkbox, dropdown, and text entry | `Checkbox`, `Dropdown`, `TextInput` |
+| Text and icon actions with touch feedback | `Button`, `TextButton`, `IconButton`, `ChoiceButton` |
+| Text entry, search, select, and action menus | `TextInput`, `TextArea`, `SearchField`, `Dropdown`, `DropdownMenu` |
+| Boolean, range, and exclusive selection | `Checkbox`, `Switch`, `Slider`, `RadioGroup` |
+| Navigation and disclosure | `TabButton`, `Tabs`, `Accordion`, `Divider` |
 | Header, tag, status, class icon, spinner | `Header`, `Tag`, `StatusBadge`, `ClassIcon`, `Spinner` |
-| Tooltips and notifications | `Tooltip`, `ToastHost`, `Modal` |
+| Feedback, loading, and empty states | `Alert`, `Progress`, `Skeleton`, `EmptyState` |
+| Tooltips, notifications, and dialogs | `Tooltip`, `ToastHost`, `Modal` |
 | Scrolling and virtualized lists | `ScrollView`, `ScrollingFrame`, `VirtualList` |
 | Patch, string, and table visualization | `DiffPanel`, `PatchVisualizer`, `StringDiff`, `TableDiff` |
 | Editable image wrapper | `EditableImage` |
+
+`Slider` uses Studio's native `UIDragDetector` pointer capture and keeps mouse
+or touch movement until release, even after it leaves the whole component.
+`Dropdown` and `DropdownMenu` portal their open menu
+to the dock's top GUI layer so scrolling surfaces cannot cover or clip it.
+Prominent `Button` instances can use `Appearance = "Tactile"`, which adds a
+stationary lower-z-index depth element; only the button face moves down while
+pressed.
 
 The canonical Sandblock colors, typography, spacing, radii, and health states
 live in `src/UI/Theme.lua`. The anchor accent is `#f6c944`.
 
 The toolbar and dock header use the uploaded Sandblock app icon configured as
 `PluginIcon` in `src/Config.lua` (`rbxassetid://82545901411321`).
+
+Roblox-hosted Sandblock Studios media is available from `src/UI/Assets.lua`.
+Consumers use stable names such as `Assets.Brand.Mark.White`,
+`Assets.Brand.WordmarkCompact.Yellow`, or
+`Assets.Illustrations.Audience.VideoGame` instead of scattering numeric asset
+IDs through UI code. The exact transparent upload inputs and pending upload
+state live under `assets/roblox/`.
 
 ## Hot reload in Studio
 

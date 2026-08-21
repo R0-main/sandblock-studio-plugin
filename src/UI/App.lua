@@ -184,6 +184,7 @@ function App.mount(parent: Instance, options: any?)
 		Name = "ConnectServices",
 		Text = "Connect services",
 		Style = "Primary",
+		Appearance = "Tactile",
 		OnActivated = function()
 			if options.OnToggleConnection then
 				options.OnToggleConnection(not (bridgeEnabled or rojoEnabled))
