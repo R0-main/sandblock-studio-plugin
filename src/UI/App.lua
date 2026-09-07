@@ -51,7 +51,12 @@ local function healthRow(parent: Instance, theme: any, title: string, descriptio
 	badge.Root.AnchorPoint = Vector2.new(1, 0)
 	badge.Root.Position = UDim2.fromScale(1, 0)
 
-	return badge
+	return {
+		Set = badge.Set,
+		SetDetail = function(text: string)
+			descriptionLabel.Text = text
+		end,
+	}
 end
 
 function App.mount(parent: Instance, options: any?)
@@ -105,46 +110,74 @@ function App.mount(parent: Instance, options: any?)
 		Theme = theme,
 	}).Root
 
-	local overview = Components.Surface({
+	-- One page, three facts and one action: which project Studio is bound to,
+	-- how the MCP bridge and the Rojo server are doing, and a single control
+	-- that starts or stops both.
+	local project = Components.Surface({
 		Parent = runtimePage,
-		Title = "Studio connection",
-		Subtitle = "The plugin keeps outbound loopback communication local and exposes explicit recovery controls.",
+		Title = "Project",
+		Subtitle = "Sandblock Code owns repository paths; the plugin only ever names an approved runtime.",
 		LayoutOrder = 1,
 		Theme = theme,
 	})
-
-	local bridgeStatus =
-		healthRow(overview.Content, theme, "MCP bridge", "Outbound connection to the Sandblock gateway", 1)
-	Components.Divider({ Parent = overview.Content, LayoutOrder = 2, Theme = theme })
-	local rojoStatus = healthRow(
-		overview.Content,
+	local projectName = makeLabel(project.Content, theme, "No project selected")
+	projectName.FontFace = theme.Font.Semibold
+	local placeLabel = makeLabel(
+		project.Content,
 		theme,
-		"Rojo adapter",
-		options.RojoDescription or "Pinned sync client integration",
-		3
+		string.format("This Studio place · %s (%s)", game.Name, tostring(game.PlaceId)),
+		true
 	)
-	rojoStatus.Set("neutral", "Stopped")
+	placeLabel.TextSize = theme.TextSize.Small
+	local placeStatus = Components.StatusBadge({
+		Parent = project.Content,
+		Status = "neutral",
+		Text = "No project selected",
+		Theme = theme,
+	})
+	local chooseButton = Components.Button({
+		Parent = project.Content,
+		Name = "ChooseProject",
+		Text = "Choose project",
+		Style = "Secondary",
+		Size = UDim2.new(1, 0, 0, theme.Control.Regular),
+		OnActivated = function()
+			if options.OnChooseProject then
+				options.OnChooseProject()
+			end
+		end,
+		Theme = theme,
+	})
 
-	local project = Components.Surface({
+	local services = Components.Surface({
 		Parent = runtimePage,
-		Title = "Project binding",
-		Subtitle = "Sandblock Code remains the source of truth for approved runtimes and repository paths.",
+		Title = "Services",
 		LayoutOrder = 2,
 		Theme = theme,
 	})
-	local projectName = makeLabel(project.Content, theme, options.ProjectName or "No approved runtime selected")
-	projectName.FontFace = theme.Font.Semibold
-	local place = makeLabel(
-		project.Content,
-		theme,
-		string.format("Current Studio place · %s (%s)", game.Name, tostring(game.PlaceId)),
-		true
-	)
-	place.TextSize = theme.TextSize.Small
-	local placeStatus = Components.StatusBadge({
-		Parent = project.Content,
-		Status = "warning",
-		Text = "PlaceId not validated",
+	local bridgeStatus =
+		healthRow(services.Content, theme, "MCP bridge", "Outbound connection to the Sandblock gateway", 1)
+	Components.Divider({ Parent = services.Content, LayoutOrder = 2, Theme = theme })
+	local rojoStatus =
+		healthRow(services.Content, theme, "Rojo sync", options.RojoDescription or "Pinned sync client integration", 3)
+	rojoStatus.Set("neutral", "Stopped")
+
+	local bridgeEnabled = false
+	local rojoEnabled = false
+	local connectButton = Components.Button({
+		Parent = services.Content,
+		Name = "ConnectServices",
+		Text = "Connect",
+		Style = "Primary",
+		Appearance = "Tactile",
+		LayoutOrder = 4,
+		Height = theme.Control.Large,
+		Size = UDim2.new(1, 0, 0, theme.Control.Large),
+		OnActivated = function()
+			if options.OnToggleConnection then
+				options.OnToggleConnection(not (bridgeEnabled or rojoEnabled))
+			end
+		end,
 		Theme = theme,
 	})
 
@@ -163,32 +196,60 @@ function App.mount(parent: Instance, options: any?)
 	errorText.FontFace = theme.Font.Code
 	errorText.TextSize = theme.TextSize.Code
 
-	local actions = Components.Surface({
-		Parent = runtimePage,
-		Title = "Local services",
-		Subtitle = "One action connects the MCP bridge and the pinned Rojo client together.",
-		LayoutOrder = 4,
+	-- Project picker. It lists what Sandblock Code approved, nothing the plugin
+	-- discovered by itself, so there is no path to type in anywhere.
+	local pickerPage = Components.ScrollView({
+		Parent = content,
+		Name = "ProjectPicker",
+		Padding = theme.Spacing.Large,
+		Gap = theme.Spacing.Medium,
+		Theme = theme,
+	}).Root
+	pickerPage.Visible = false
+
+	local picker = Components.Surface({
+		Parent = pickerPage,
+		Title = "Select a project",
+		Subtitle = "Projects registered in Sandblock Code. Connecting starts this project's Rojo server in its own repository.",
+		LayoutOrder = 1,
 		Theme = theme,
 	})
-	local actionRow = Instance.new("Frame")
-	actionRow.AutomaticSize = Enum.AutomaticSize.Y
-	actionRow.BackgroundTransparency = 1
-	actionRow.Size = UDim2.new(1, 0, 0, 0)
-	actionRow.Parent = actions.Content
-	Util.list(actionRow, Enum.FillDirection.Horizontal, theme.Spacing.Small)
+	local pickerList = Instance.new("Frame")
+	pickerList.Name = "Runtimes"
+	pickerList.AutomaticSize = Enum.AutomaticSize.Y
+	pickerList.BackgroundTransparency = 1
+	pickerList.Size = UDim2.new(1, 0, 0, 0)
+	pickerList.Parent = picker.Content
+	Util.list(pickerList, Enum.FillDirection.Vertical, theme.Spacing.Small)
 
-	local bridgeEnabled = false
-	local rojoEnabled = false
-	local connectButton = Components.Button({
-		Parent = actionRow,
-		Name = "ConnectServices",
-		Text = "Connect services",
-		Style = "Primary",
-		Appearance = "Tactile",
+	local pickerFooter = Instance.new("Frame")
+	pickerFooter.Name = "PickerActions"
+	pickerFooter.AutomaticSize = Enum.AutomaticSize.Y
+	pickerFooter.BackgroundTransparency = 1
+	pickerFooter.LayoutOrder = 2
+	pickerFooter.Size = UDim2.new(1, 0, 0, 0)
+	pickerFooter.Parent = picker.Content
+	Util.list(pickerFooter, Enum.FillDirection.Horizontal, theme.Spacing.Small)
+	Components.Button({
+		Parent = pickerFooter,
+		Name = "RefreshRuntimes",
+		Text = "Refresh",
+		Style = "Secondary",
 		OnActivated = function()
-			if options.OnToggleConnection then
-				options.OnToggleConnection(not (bridgeEnabled or rojoEnabled))
+			if options.OnChooseProject then
+				options.OnChooseProject()
 			end
+		end,
+		Theme = theme,
+	})
+	local closePicker
+	Components.Button({
+		Parent = pickerFooter,
+		Name = "CancelPicker",
+		Text = "Cancel",
+		Style = "Ghost",
+		OnActivated = function()
+			closePicker()
 		end,
 		Theme = theme,
 	})
@@ -364,15 +425,29 @@ function App.mount(parent: Instance, options: any?)
 	local runtimeTab
 	local libraryTab
 	local settingsTab
-	local function showPage(name: string)
-		local showRuntime = name == "Runtime"
-		local showLibrary = name == "Components"
-		runtimePage.Visible = showRuntime
+	local currentPage = "Runtime"
+	local pickerOpen = false
+	local function applyVisibility()
+		local showRuntime = currentPage == "Runtime"
+		local showLibrary = currentPage == "Components"
+		runtimePage.Visible = showRuntime and not pickerOpen
+		pickerPage.Visible = showRuntime and pickerOpen
 		galleryPage.Visible = showLibrary
-		settingsPage.Visible = name == "Settings"
+		settingsPage.Visible = currentPage == "Settings"
 		runtimeTab.SetSelected(showRuntime)
 		libraryTab.SetSelected(showLibrary)
-		settingsTab.SetSelected(name == "Settings")
+		settingsTab.SetSelected(currentPage == "Settings")
+	end
+	local function showPage(name: string)
+		currentPage = name
+		applyVisibility()
+	end
+	local function setPickerOpen(value: boolean)
+		pickerOpen = value
+		applyVisibility()
+	end
+	closePicker = function()
+		setPickerOpen(false)
 	end
 
 	runtimeTab = Components.TabButton({
@@ -408,11 +483,20 @@ function App.mount(parent: Instance, options: any?)
 
 	local bridgeError: string? = nil
 	local rojoError: string? = nil
+	local runtimeError: string? = nil
+	local busy = false
+	local selectedRuntime: any = nil
+
 	local function updateConnectButton()
-		connectButton.SetText(if bridgeEnabled or rojoEnabled then "Disconnect services" else "Connect services")
+		local connected = bridgeEnabled or rojoEnabled
+		connectButton.SetText(if busy then "Working…" elseif connected then "Disconnect" else "Connect")
+		connectButton.SetEnabled(not busy)
 	end
 	local function updateErrorSurface()
 		local messages = {}
+		if runtimeError and runtimeError ~= "" then
+			table.insert(messages, runtimeError)
+		end
 		if bridgeError and bridgeError ~= "" then
 			table.insert(messages, "MCP: " .. bridgeError)
 		end
@@ -451,21 +535,176 @@ function App.mount(parent: Instance, options: any?)
 		updateErrorSurface()
 	end
 
+	local PLACE_LABELS = {
+		verified = { "success", "Place verified" },
+		unbound = { "warning", "Place not bound" },
+		mismatch = { "error", "Wrong place open" },
+	}
+
+	-- The plugin shows the project it will act on before anything connects, so a
+	-- mismatch between this Studio place and the project's main place is visible
+	-- instead of being discovered halfway through a sync.
+	local function setProject(runtime: any, placeState: string?, placeMessage: string?)
+		selectedRuntime = runtime
+		projectName.Text = if runtime then tostring(runtime.displayName) else "No project selected"
+		chooseButton.SetText(if runtime then "Change project" else "Choose project")
+		local label = PLACE_LABELS[placeState or ""]
+		if runtime == nil then
+			placeStatus.Set("neutral", "No project selected")
+		elseif label then
+			placeStatus.Set(label[1], label[2])
+		else
+			placeStatus.Set("neutral", "Not validated")
+		end
+		runtimeError = placeMessage
+		updateErrorSurface()
+	end
+
+	-- Sync freshness, refreshed once a second while a sync has happened. Seeing
+	-- "Synced just now" age into "2 minutes ago" is how you notice a server that
+	-- stopped answering without any error being raised.
+	local lastSyncAt: number? = nil
+	local lastSyncCount = 0
+	local lastSyncProject: string? = nil
+	local staticRojoDetail = options.RojoDescription or "Pinned sync client integration"
+
+	local function renderRojoDetail()
+		if lastSyncAt == nil then
+			rojoStatus.SetDetail(staticRojoDetail)
+			return
+		end
+		local parts = { "Synced " .. Util.elapsedText(os.time() - lastSyncAt) }
+		if lastSyncProject then
+			table.insert(parts, lastSyncProject)
+		end
+		if lastSyncCount > 0 then
+			table.insert(parts, string.format("%d change%s", lastSyncCount, if lastSyncCount > 1 then "s" else ""))
+		end
+		rojoStatus.SetDetail(table.concat(parts, " · "))
+	end
+
+	local function setRuntimeDetail(text: string)
+		lastSyncAt = nil
+		staticRojoDetail = text
+		rojoStatus.SetDetail(text)
+	end
+
+	local function markSynced(info: any)
+		info = info or {}
+		lastSyncAt = os.time()
+		lastSyncCount = tonumber(info.appliedCount) or 0
+		lastSyncProject = info.projectName or lastSyncProject
+		renderRojoDetail()
+	end
+
+	local ticking = true
+	task.spawn(function()
+		while ticking do
+			task.wait(1)
+			if ticking and lastSyncAt ~= nil then
+				renderRojoDetail()
+			end
+		end
+	end)
+
+	local function clearPicker()
+		for _, child in pickerList:GetChildren() do
+			if child:IsA("GuiObject") then
+				child:Destroy()
+			end
+		end
+	end
+
+	local function describeRuntime(runtime: any): string
+		local parts = {}
+		if runtime.mainPlaceId then
+			table.insert(parts, "Main place " .. tostring(runtime.mainPlaceId))
+		else
+			table.insert(parts, "No place bound")
+		end
+		if runtime.projectFile then
+			table.insert(parts, tostring(runtime.projectFile))
+		end
+		local rojo = runtime.rojo
+		if rojo and (rojo.state == "running" or rojo.state == "external") then
+			local prefix = if rojo.state == "external" then "already served on " else "serving on "
+			table.insert(parts, prefix .. tostring(rojo.url))
+		end
+		if runtime.issue then
+			table.insert(parts, tostring(runtime.issue))
+		end
+		return table.concat(parts, " · ")
+	end
+
+	-- Renders the approved runtime list. `message` replaces the list when
+	-- Sandblock Code could not be reached, so the panel always says what to do
+	-- next instead of showing an empty box.
+	local function setRuntimes(runtimes: { any }?, message: string?)
+		clearPicker()
+		if message then
+			Components.Alert({
+				Parent = pickerList,
+				Tone = "danger",
+				Title = "Sandblock Code unavailable",
+				Message = message,
+				Theme = theme,
+			})
+		elseif runtimes == nil or #runtimes == 0 then
+			Components.EmptyState({
+				Parent = pickerList,
+				Title = "No project registered",
+				Description = "Add a game repository in Sandblock Code, then refresh this list.",
+				Theme = theme,
+			})
+		else
+			for index, runtime in runtimes do
+				local isSelected = selectedRuntime ~= nil and selectedRuntime.runtimeId == runtime.runtimeId
+				Components.ChoiceButton({
+					Parent = pickerList,
+					Name = "Runtime" .. index,
+					LayoutOrder = index,
+					Icon = if runtime.rojo
+							and (runtime.rojo.state == "running" or runtime.rojo.state == "external")
+						then "▶"
+						else "◇",
+					Text = tostring(runtime.displayName),
+					Description = describeRuntime(runtime),
+					Selected = isSelected,
+					OnActivated = function()
+						setPickerOpen(false)
+						if options.OnSelectRuntime then
+							options.OnSelectRuntime(runtime)
+						end
+					end,
+					Theme = theme,
+				})
+			end
+		end
+		setPickerOpen(true)
+	end
+
 	setBridgeState("neutral", nil, false)
+	setProject(nil)
+	bridgeStatus.SetDetail("Outbound connection to the Sandblock gateway")
 
 	return {
 		Root = root,
 		SetBridgeState = setBridgeState,
-		SetPlaceState = function(status: string, text: string)
-			placeStatus.Set(status, text)
-		end,
-		SetProjectName = function(text: string)
-			projectName.Text = text
-		end,
+		SetBridgeDetail = bridgeStatus.SetDetail,
 		SetRojoState = setRojoState,
+		SetRojoDetail = setRuntimeDetail,
+		MarkSynced = markSynced,
+		SetProject = setProject,
+		SetRuntimes = setRuntimes,
+		SetPickerOpen = setPickerOpen,
+		SetBusy = function(value: boolean)
+			busy = value
+			updateConnectButton()
+		end,
 		ShowPage = showPage,
 		Notify = toastHost.Push,
 		Destroy = function()
+			ticking = false
 			root:Destroy()
 		end,
 	}

@@ -9,6 +9,7 @@ local Config = require(script.Parent.Config)
 local Net = require(script.Parent.Net)
 local Util = require(script.Parent.Util)
 local Handlers = require(script.Parent.Handlers)
+local Runtime = require(script.Parent.Runtime)
 local UI = require(script.Parent.UI)
 local RojoAdapter = require(script.Parent.Rojo.Plugin.SandblockAdapter)
 
@@ -37,10 +38,14 @@ local function normalizeSettings(candidate: any): (any?, string?)
 	if not isLoopbackUrl(settings.McpBaseUrl) then
 		return nil, "MCP URL must use http(s)://127.0.0.1:<port> or localhost."
 	end
+	if not isLoopbackUrl(settings.RuntimeBaseUrl) then
+		return nil, "Sandblock Code URL must use http(s)://127.0.0.1:<port> or localhost."
+	end
 	if not isLoopbackUrl(settings.RojoBaseUrl) then
 		return nil, "Rojo URL must use http(s)://127.0.0.1:<port> or localhost."
 	end
 	settings.McpBaseUrl = settings.McpBaseUrl:gsub("/$", "")
+	settings.RuntimeBaseUrl = settings.RuntimeBaseUrl:gsub("/$", "")
 	settings.RojoBaseUrl = settings.RojoBaseUrl:gsub("/$", "")
 
 	if type(settings.ReconnectDelay) ~= "number" then
@@ -99,6 +104,49 @@ function Main.start(pluginObject: Plugin, options: any?)
 	-- Identifies this Studio session to the bridge, which only serves one plugin
 	-- at a time. Regenerated on every reload, so the fresh code reclaims its slot.
 	local clientId = HttpService:GenerateGUID(false)
+	-- The project this panel acts on. Only Sandblock Code can turn the id back
+	-- into a repository, so remembering it here leaks no path.
+	local selection: any = nil
+	-- Loopback URL of the Rojo server Sandblock Code started for `selection`.
+	local rojoUrl: string? = nil
+	local connecting = false
+
+	local function loadSelection(): any
+		local saved
+		pcall(function()
+			saved = pluginObject:GetSetting(Config.RuntimeKey)
+		end)
+		if type(saved) == "table" and type(saved.runtimeId) == "string" then
+			return { runtimeId = saved.runtimeId, displayName = saved.displayName or saved.runtimeId }
+		end
+		return nil
+	end
+
+	local function saveSelection(runtime: any)
+		pcall(function()
+			pluginObject:SetSetting(
+				Config.RuntimeKey,
+				if runtime then { runtimeId = runtime.runtimeId, displayName = runtime.displayName } else nil
+			)
+		end)
+	end
+
+	selection = loadSelection()
+
+	-- Studio is the only side that knows a patch was applied, so it tells the
+	-- app. Fire and forget: a lost event is a missing history line, never a
+	-- reason to interrupt a sync.
+	local function reportEvent(kind: string, payload: any?)
+		local runtimeId = selection and selection.runtimeId
+		if runtimeId == nil then
+			return
+		end
+		local event = if payload then table.clone(payload) else {}
+		event.kind = kind
+		task.spawn(function()
+			Runtime.report(settings.RuntimeBaseUrl, runtimeId, event)
+		end)
+	end
 
 	local function execute(command: any)
 		local handler = Handlers[command.tool]
@@ -118,20 +166,29 @@ function Main.start(pluginObject: Plugin, options: any?)
 	local setRojoRunning
 	local setAllRunning
 	local applySettings
+	local chooseProject
+	local selectRuntime
 	local panel
 	local rojoCompatibility = RojoAdapter.getCompatibility()
+	local rojoDescription = string.format(
+		"Pinned Sandblock fork · client %s · protocol %d",
+		rojoCompatibility.clientVersion,
+		rojoCompatibility.protocolVersion
+	)
 	panel = UI.create(pluginObject, {
 		Icon = Config.PluginIcon,
 		Widget = if host then host.Widget else nil,
-		RojoDescription = string.format(
-			"Pinned Sandblock fork · client %s · protocol %d",
-			rojoCompatibility.clientVersion,
-			rojoCompatibility.protocolVersion
-		),
+		RojoDescription = rojoDescription,
 		InitialSettings = settings,
 		DefaultSettings = Config.DefaultSettings,
 		OnToggleConnection = function(value: boolean)
 			setAllRunning(value)
+		end,
+		OnChooseProject = function()
+			chooseProject()
+		end,
+		OnSelectRuntime = function(runtime: any)
+			selectRuntime(runtime)
 		end,
 		OnApplySettings = function(nextSettings: any)
 			return applySettings(nextSettings)
@@ -211,6 +268,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 				session:stop()
 			end
 			panel.App.SetRojoState("neutral", "Stopped", nil, false)
+			panel.App.SetRojoDetail(rojoDescription)
 			print("[Sandblock Rojo] sync stopped")
 			return
 		end
@@ -218,9 +276,14 @@ function Main.start(pluginObject: Plugin, options: any?)
 		rojoRunning = true
 		panel.App.SetRojoState("connecting", "Connecting", nil, true)
 
+		-- Sandblock Code decides which port serves this project; the manual URL
+		-- is only used by the fallback path below.
+		local baseUrl = rojoUrl or settings.RojoBaseUrl
+		panel.App.SetRojoDetail(baseUrl)
+
 		local session
 		session = RojoAdapter.new({
-			baseUrl = settings.RojoBaseUrl,
+			baseUrl = baseUrl,
 			twoWaySync = settings.TwoWaySync,
 			settings = {
 				enableSyncFallback = settings.EnableSyncFallback,
@@ -238,7 +301,9 @@ function Main.start(pluginObject: Plugin, options: any?)
 					return
 				end
 				local status = if summary.hasUnapplied then "warning" else "success"
+				panel.App.MarkSynced({ appliedCount = summary.appliedCount })
 				panel.App.Notify(string.format("Rojo applied %d instance change(s).", summary.appliedCount), status)
+				reportEvent("sync", { appliedCount = summary.appliedCount, hasUnapplied = summary.hasUnapplied })
 			end,
 			onStatusChanged = function(status: string, detail: any)
 				if destroyed or rojoSession ~= session then
@@ -250,13 +315,15 @@ function Main.start(pluginObject: Plugin, options: any?)
 				elseif status == RojoAdapter.Status.Connected then
 					local projectName = tostring(detail)
 					panel.App.SetRojoState("connected", "Connected", nil, true)
-					panel.App.SetProjectName(projectName)
-					panel.App.SetPlaceState("connected", "Accepted by Rojo server")
+					panel.App.SetRojoDetail(string.format("%s · %s", projectName, baseUrl))
+					panel.App.MarkSynced({ projectName = projectName })
 					panel.App.Notify("Rojo connected to " .. projectName .. ".", "success")
+					reportEvent("connected", { projectName = projectName, url = baseUrl })
 					print("[Sandblock Rojo] connected to " .. projectName)
 				elseif status == RojoAdapter.Status.Disconnected then
 					rojoSession = nil
 					rojoRunning = false
+					reportEvent("disconnected", if detail ~= nil then { error = tostring(detail) } else nil)
 					if running then
 						setRunning(false)
 					end
@@ -272,15 +339,175 @@ function Main.start(pluginObject: Plugin, options: any?)
 		})
 		rojoSession = session
 		session:start()
-		print("[Sandblock Rojo] connecting to " .. settings.RojoBaseUrl)
+		print("[Sandblock Rojo] connecting to " .. baseUrl)
+	end
+
+	-- Applies a runtime descriptor to the panel and remembers it for next time.
+	local function applySelection(runtime: any)
+		selection = runtime
+		saveSelection(runtime)
+		if runtime == nil then
+			panel.App.SetProject(nil)
+			return "unbound", nil
+		end
+		local placeState, placeMessage = Runtime.checkPlace(runtime)
+		panel.App.SetProject(runtime, placeState, placeMessage)
+		return placeState, placeMessage
+	end
+
+	panel.App.SetBridgeDetail(settings.McpBaseUrl)
+	if selection then
+		-- Only the remembered name; nothing is verified until the user connects.
+		panel.App.SetProject(selection)
+	end
+
+	function chooseProject()
+		if destroyed or connecting then
+			return
+		end
+		task.spawn(function()
+			panel.App.SetBusy(true)
+			local result = Runtime.list(settings.RuntimeBaseUrl)
+			panel.App.SetBusy(false)
+			if destroyed then
+				return
+			end
+			if result.status == "ok" then
+				panel.App.SetRuntimes(result.runtimes)
+			else
+				panel.App.SetRuntimes(nil, result.message)
+			end
+		end)
+	end
+
+	-- Starts this project's Rojo server through Sandblock Code, then connects
+	-- both local services to it.
+	local function connectTo(runtimeId: string)
+		if destroyed or connecting then
+			return
+		end
+		connecting = true
+		panel.App.SetBusy(true)
+		task.spawn(function()
+			local function finish()
+				connecting = false
+				panel.App.SetBusy(false)
+			end
+
+			local listed = Runtime.list(settings.RuntimeBaseUrl)
+			if destroyed then
+				finish()
+				return
+			end
+			if listed.status ~= "ok" then
+				finish()
+				-- Manual recovery: with no project chosen and the app unavailable,
+				-- the saved Rojo URL still lets someone connect to a server they
+				-- started themselves. It never overrides an explicit project.
+				if selection == nil then
+					rojoUrl = nil
+					panel.App.Notify("Connecting to the manual Rojo URL.", "warning")
+					setRunning(true)
+					setRojoRunning(true)
+					return
+				end
+				panel.App.SetProject(selection, "unbound", listed.message)
+				return
+			end
+
+			local runtime
+			for _, candidate in listed.runtimes or {} do
+				if candidate.runtimeId == runtimeId then
+					runtime = candidate
+					break
+				end
+			end
+			if runtime == nil then
+				finish()
+				applySelection(nil)
+				panel.App.SetProject(
+					nil,
+					nil,
+					"That project is no longer registered in Sandblock Code. Choose another one."
+				)
+				return
+			end
+
+			local placeState = applySelection(runtime)
+			if placeState == "mismatch" then
+				-- Refusing before anything starts keeps a sync from writing this
+				-- project's tree into someone else's place.
+				finish()
+				return
+			end
+
+			local started = Runtime.start(settings.RuntimeBaseUrl, runtimeId)
+			if destroyed then
+				finish()
+				return
+			end
+			if started.status ~= "ok" then
+				finish()
+				panel.App.SetProject(runtime, placeState, started.message)
+				return
+			end
+
+			local descriptor = started.runtime
+			local rojo = descriptor and descriptor.rojo
+			rojoUrl = rojo and rojo.url or nil
+			if rojoUrl == nil then
+				finish()
+				panel.App.SetProject(
+					runtime,
+					placeState,
+					(rojo and rojo.error) or "Sandblock Code did not report a Rojo URL."
+				)
+				return
+			end
+			if rojo.compatible == false then
+				panel.App.Notify(
+					string.format("Rojo protocol %s does not match the pinned client.", tostring(rojo.protocolVersion)),
+					"warning"
+				)
+			end
+
+			finish()
+			print(string.format("[Sandblock] %s serving on %s", tostring(descriptor.displayName), rojoUrl))
+			setRunning(true)
+			setRojoRunning(true)
+		end)
+	end
+
+	function selectRuntime(runtime: any)
+		if destroyed or runtime == nil then
+			return
+		end
+		if running or rojoRunning then
+			setAllRunning(false)
+		end
+		applySelection(runtime)
+		connectTo(runtime.runtimeId)
 	end
 
 	function setAllRunning(value: boolean)
 		if destroyed then
 			return
 		end
-		setRunning(value)
-		setRojoRunning(value)
+		if not value then
+			connecting = false
+			panel.App.SetBusy(false)
+			rojoUrl = nil
+			setRunning(false)
+			setRojoRunning(false)
+			return
+		end
+		-- Connecting always goes through a project: without one there is nothing
+		-- to serve, so the picker is the first thing the button does.
+		if selection == nil then
+			chooseProject()
+			return
+		end
+		connectTo(selection.runtimeId)
 	end
 
 	function applySettings(candidate: any): (boolean, string?)
@@ -294,6 +521,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 			setAllRunning(false)
 		end
 		settings = normalized
+		panel.App.SetBridgeDetail(settings.McpBaseUrl)
 		pcall(function()
 			pluginObject:SetSetting(Config.SettingsKey, settings)
 		end)

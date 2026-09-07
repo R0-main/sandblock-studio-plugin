@@ -120,4 +120,28 @@ function Util.clear(parent: Instance)
 	end
 end
 
+-- Age of an event in the words Rojo's own panel uses, so the two plugins read
+-- the same way to someone switching between them.
+local AGE_STEPS = {
+	{ seconds = 31556909, unit = "year" },
+	{ seconds = 2629743, unit = "month" },
+	{ seconds = 604800, unit = "week" },
+	{ seconds = 86400, unit = "day" },
+	{ seconds = 3600, unit = "hour" },
+	{ seconds = 60, unit = "minute" },
+}
+
+function Util.elapsedText(elapsed: number): string
+	if elapsed < 3 then
+		return "just now"
+	end
+	for _, step in AGE_STEPS do
+		if elapsed >= step.seconds then
+			local count = math.floor(elapsed / step.seconds)
+			return string.format("%d %s%s ago", count, step.unit, if count > 1 then "s" else "")
+		end
+	end
+	return string.format("%d seconds ago", math.floor(elapsed))
+end
+
 return Util

@@ -10,21 +10,48 @@ automatic binding remain the next integration step.
 ## Studio UI
 
 The toolbar button opens a `DockWidgetPluginGui`; opening the panel does not
-start the bridge automatically. The Runtime tab shows the current Studio place,
-MCP health, the pinned Rojo client/protocol, live sync state, and manual
-recovery actions. One **Connect services** action starts both the MCP bridge and
-the fork-owned Rojo session; disconnecting stops both together. It does not
-create a second Rojo UI. The MCP connection first claims its gateway slot with
-an immediate request, so its status does not wait for the first 25-second
+start anything. The Runtime tab is one page: the selected project and how this
+Studio place relates to it, the MCP bridge and Rojo sync rows, and a single
+**Connect** button.
+
+Connecting is project-first:
+
+1. **Connect** with no project selected opens the picker.
+2. The picker lists the projects registered in Sandblock Code, most relevant
+   first, with their main place, Rojo project file, and whether that project is
+   already being served — including by a Rojo someone started by hand, which is
+   reused rather than duplicated. It lists nothing this plugin discovered by itself.
+3. Choosing a project asks Sandblock Code to run the pinned Rojo build in that
+   project's repository and returns the loopback port it was given.
+4. The MCP bridge and the fork-owned Rojo session then connect together, and
+   **Disconnect** stops both. Stopping the sync in Studio leaves the server
+   running; Sandblock Code owns its lifecycle.
+
+While a session is live the Rojo row shows how fresh the sync is — **Synced just
+now**, then **12 seconds ago**, **2 minutes ago**, in Rojo's own wording — with
+the project name and the number of instances the last patch touched. An
+apparently healthy connection that quietly stopped syncing is visible that way
+instead of staying green. The plugin also reports each connect, patch, and
+disconnect to Sandblock Code, which keeps the project's sync history beside its
+tool history.
+
+The chosen project is remembered as an opaque runtime id, so reconnecting later
+is one click. Before anything starts, the plugin compares the open place with
+the project's `mainPlaceId` and refuses a mismatch instead of syncing a project
+into the wrong place. The MCP connection first claims its gateway slot with an
+immediate request, so its status does not wait for the first 25-second
 long-poll response before showing **Connected**.
+
 The Components tab renders the library at the same narrow width used by the
 real plugin.
 
 The Settings tab persists local connection overrides through Roblox plugin
-settings. It exposes the MCP and Rojo loopback URLs, reconnect delay, two-way
-sync, fallback behavior, payload validation, external script opening, and Rojo
-timing logs. Saving while connected restarts both services with the new values;
-non-loopback endpoints are rejected.
+settings. It exposes the MCP gateway URL, the Sandblock Code runtime URL, the
+manual Rojo fallback URL, reconnect delay, two-way sync, fallback behavior,
+payload validation, external script opening, and Rojo timing logs. Saving while
+connected restarts both services with the new values; non-loopback endpoints are
+rejected. The manual Rojo URL is used only when no project is selected and the
+runtime service cannot be reached — a server someone started by hand.
 
 `src/UI/Components.lua` is parent-agnostic and can mount its native
 `GuiObject`s under a dock widget, `ScreenGui`, or another GUI container. It
@@ -136,8 +163,12 @@ Compatibility is currently pinned to Rojo `7.7.0-rc.1`, protocol `5`.
 
 ## Ownership boundary
 
-- Sandblock Code owns repository paths and running project metadata.
-- This plugin receives approved runtime descriptors over loopback HTTP.
-- The plugin validates the current `PlaceId` before selecting a runtime.
+- Sandblock Code owns repository paths and running project metadata. It also
+  owns the Rojo process: this plugin asks for a project by opaque id and gets a
+  loopback URL back, never a path and never a port it picked itself.
+- This plugin receives approved runtime descriptors over loopback HTTP from the
+  runtime service (default `http://127.0.0.1:3071`, requests marked with the
+  `X-Sandblock-Runtime` header).
+- The plugin validates the current `PlaceId` before starting a runtime.
 - The Rojo fork owns sync-engine changes; this repository owns Sandblock UI and
   MCP/Studio behavior.
