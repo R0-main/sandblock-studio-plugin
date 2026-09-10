@@ -91,28 +91,65 @@ function Runtime.report(baseUrl: string, runtimeId: string, event: any): Result
 	return requestJson(baseUrl .. "/runtimes/" .. HttpService:UrlEncode(runtimeId) .. "/events", "POST", payload)
 end
 
--- Describes how this Studio place relates to a runtime's configured place.
--- Returns (state, message) where state is "verified", "unbound" or "mismatch".
-function Runtime.checkPlace(runtime: any): (string, string?)
-	local expected = tonumber(runtime and runtime.mainPlaceId)
+-- The places a project declares, newest contract first.
+--
+-- A project written before places existed carries only `mainPlaceId`; reading
+-- it back as a single main place is exactly how that project behaved.
+local function declaredPlaces(runtime: any): { any }
+	local places = runtime and runtime.places
+	if type(places) == "table" and #places > 0 then
+		return places
+	end
+	local main = tonumber(runtime and runtime.mainPlaceId)
+	if main == nil then
+		return {}
+	end
+	return { { key = "main", name = tostring(runtime.displayName), placeId = main, main = true } }
+end
+
+Runtime.declaredPlaces = declaredPlaces
+
+-- Names the declared places, for a message that has to say what *is* allowed.
+local function placeSummary(places: { any }): string
+	local names = {}
+	for _, place in places do
+		table.insert(names, string.format("%s (%s)", tostring(place.name), tostring(place.placeId)))
+	end
+	return table.concat(names, ", ")
+end
+
+-- Matches this Studio place against the ones the project declares.
+--
+-- The declared list is an allowlist: connecting from a place that is not in it
+-- would let an agent edit a place nobody approved, so the plugin refuses rather
+-- than connecting and hoping.
+--
+-- Returns (state, place, message) where state is "verified", "unbound" or
+-- "mismatch", and `place` is the matched declaration when verified.
+function Runtime.resolvePlace(runtime: any): (string, any?, string?)
+	local places = declaredPlaces(runtime)
 	local current = game.PlaceId
-	if expected == nil then
+	if #places == 0 then
 		return "unbound",
-			"No main place is bound to this project yet. Bind this Studio place from Sandblock Code to enable validation."
+			nil,
+			"No place is declared for this project yet. Declare its Roblox places in Sandblock Code to enable validation."
 	end
 	if current == 0 then
-		return "unbound", "This place has never been published, so Studio reports no PlaceId to validate."
+		return "unbound", nil, "This place has never been published, so Studio reports no PlaceId to validate."
 	end
-	if expected ~= current then
-		return "mismatch",
-			string.format(
-				"This Studio place (%d) is not %s's main place (%d). Open the project's place, or rebind it in Sandblock Code.",
-				current,
-				tostring(runtime.displayName),
-				expected
-			)
+	for _, place in places do
+		if tonumber(place.placeId) == current then
+			return "verified", place, nil
+		end
 	end
-	return "verified", nil
+	return "mismatch",
+		nil,
+		string.format(
+			"This Studio place (%d) is not one of %s's declared places: %s. Open a declared place, or add this one in Sandblock Code.",
+			current,
+			tostring(runtime.displayName),
+			placeSummary(places)
+		)
 end
 
 return Runtime

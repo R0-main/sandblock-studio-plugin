@@ -109,6 +109,11 @@ function Main.start(pluginObject: Plugin, options: any?)
 	local selection: any = nil
 	-- Loopback URL of the Rojo server Sandblock Code started for `selection`.
 	local rojoUrl: string? = nil
+	-- The declared place this Studio holds, and the list it belongs to. Sent to
+	-- the bridge on every claim: it is what lets several Studios share the
+	-- gateway, one per place, and what bounds where an agent can switch to.
+	local heldPlace: any = nil
+	local declaredPlaces: { any } = {}
 	local connecting = false
 
 	local function loadSelection(): any
@@ -195,6 +200,16 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end,
 	})
 
+	-- What this Studio tells the bridge about itself when it claims its place.
+	local function claimPayload(): any
+		return {
+			runtimeId = selection and selection.runtimeId,
+			projectName = selection and selection.displayName,
+			place = heldPlace,
+			places = declaredPlaces,
+		}
+	end
+
 	local function loop(generation: number)
 		local claimed = false
 		while not destroyed and running and runGeneration == generation do
@@ -204,18 +219,23 @@ function Main.start(pluginObject: Plugin, options: any?)
 			if claimed then
 				status, command, message = Net.poll(settings.McpBaseUrl, clientId)
 			else
-				status, message = Net.claim(settings.McpBaseUrl, clientId)
+				status, message = Net.claim(settings.McpBaseUrl, clientId, claimPayload())
 			end
 			if destroyed or runGeneration ~= generation then
 				return
 			end
 			if status == "busy" then
-				-- The bridge serves a single Studio; refusing here keeps the two
-				-- plugins from stealing each other's commands.
+				-- One Studio per place: refusing here keeps two plugins on the
+				-- same place from stealing each other's commands. Studios on
+				-- *different* declared places connect side by side.
 				local detail = tostring(message) .. " Stop the bridge in the other Studio, then retry from this panel."
 				warn("[Sandblock] " .. detail)
 				setAllRunning(false)
 				panel.App.SetBridgeState("busy", detail, false)
+			elseif status == "reclaim" then
+				-- The gateway restarted, or this session timed out while Studio
+				-- was busy. Claiming again is the whole recovery.
+				claimed = false
 			elseif status == "unreachable" then
 				panel.App.SetBridgeState(
 					"disconnected",
@@ -347,11 +367,15 @@ function Main.start(pluginObject: Plugin, options: any?)
 		selection = runtime
 		saveSelection(runtime)
 		if runtime == nil then
+			heldPlace = nil
+			declaredPlaces = {}
 			panel.App.SetProject(nil)
 			return "unbound", nil
 		end
-		local placeState, placeMessage = Runtime.checkPlace(runtime)
-		panel.App.SetProject(runtime, placeState, placeMessage)
+		local placeState, place, placeMessage = Runtime.resolvePlace(runtime)
+		heldPlace = place
+		declaredPlaces = Runtime.declaredPlaces(runtime)
+		panel.App.SetProject(runtime, placeState, placeMessage, place)
 		return placeState, placeMessage
 	end
 
@@ -436,7 +460,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 			local placeState = applySelection(runtime)
 			if placeState == "mismatch" then
 				-- Refusing before anything starts keeps a sync from writing this
-				-- project's tree into someone else's place.
+				-- project's tree into a place nobody declared.
 				finish()
 				return
 			end
@@ -448,7 +472,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 			end
 			if started.status ~= "ok" then
 				finish()
-				panel.App.SetProject(runtime, placeState, started.message)
+				panel.App.SetProject(runtime, placeState, started.message, heldPlace)
 				return
 			end
 
@@ -460,7 +484,8 @@ function Main.start(pluginObject: Plugin, options: any?)
 				panel.App.SetProject(
 					runtime,
 					placeState,
-					(rojo and rojo.error) or "Sandblock Code did not report a Rojo URL."
+					(rojo and rojo.error) or "Sandblock Code did not report a Rojo URL.",
+					heldPlace
 				)
 				return
 			end

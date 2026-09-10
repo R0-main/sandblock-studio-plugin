@@ -36,11 +36,17 @@ disconnect to Sandblock Code, which keeps the project's sync history beside its
 tool history.
 
 The chosen project is remembered as an opaque runtime id, so reconnecting later
-is one click. Before anything starts, the plugin compares the open place with
-the project's `mainPlaceId` and refuses a mismatch instead of syncing a project
-into the wrong place. The MCP connection first claims its gateway slot with an
-immediate request, so its status does not wait for the first 25-second
-long-poll response before showing **Connected**.
+is one click. Before anything starts, the plugin matches the open place against
+the places the project declares in Sandblock Code, and refuses an undeclared one
+— naming the declared places — instead of syncing a project into a place nobody
+approved. The panel then shows which declared place this Studio holds.
+
+That place is what the MCP connection claims on the gateway, with an immediate
+request, so its status does not wait for the first 25-second long-poll response
+before showing **Connected**. One Studio holds a place, so several Studios of the
+same project connect side by side — a lobby and an arena at once — each serving
+only the commands addressed to its own place. A second Studio on the same place
+is refused, and so is a Studio belonging to another project.
 
 The Components tab renders the library at the same narrow width used by the
 real plugin.

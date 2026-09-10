@@ -537,14 +537,18 @@ function App.mount(parent: Instance, options: any?)
 
 	local PLACE_LABELS = {
 		verified = { "success", "Place verified" },
-		unbound = { "warning", "Place not bound" },
-		mismatch = { "error", "Wrong place open" },
+		unbound = { "warning", "No place declared" },
+		mismatch = { "error", "Place not declared" },
 	}
 
 	-- The plugin shows the project it will act on before anything connects, so a
-	-- mismatch between this Studio place and the project's main place is visible
-	-- instead of being discovered halfway through a sync.
-	local function setProject(runtime: any, placeState: string?, placeMessage: string?)
+	-- Studio opened on a place the project does not declare is visible instead
+	-- of being discovered halfway through a sync.
+	--
+	-- `place` is the declared place this Studio matched, which is also the place
+	-- the bridge will route an agent's commands to — naming it here is what
+	-- makes "which of my Studios is this?" answerable at a glance.
+	local function setProject(runtime: any, placeState: string?, placeMessage: string?, place: any?)
 		selectedRuntime = runtime
 		projectName.Text = if runtime then tostring(runtime.displayName) else "No project selected"
 		chooseButton.SetText(if runtime then "Change project" else "Choose project")
@@ -552,7 +556,11 @@ function App.mount(parent: Instance, options: any?)
 		if runtime == nil then
 			placeStatus.Set("neutral", "No project selected")
 		elseif label then
-			placeStatus.Set(label[1], label[2])
+			local text = label[2]
+			if placeState == "verified" and place ~= nil then
+				text = string.format("%s%s", tostring(place.name), if place.main then " · main place" else "")
+			end
+			placeStatus.Set(label[1], text)
 		else
 			placeStatus.Set("neutral", "Not validated")
 		end

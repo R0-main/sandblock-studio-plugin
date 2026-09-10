@@ -28,16 +28,25 @@ local function busyMessage(response: any): string
 	pcall(function()
 		decoded = HttpService:JSONDecode(response.Body)
 	end)
-	return decoded and decoded.message or "another Studio is already connected"
+	return decoded and decoded.message or "another Studio is already connected to this place"
 end
 
--- Claims the single Studio slot without waiting for a long-poll response.
+-- Claims this Studio's place on the bridge, without waiting for a long-poll
+-- response.
+--
+-- The claim carries the project binding this plugin has just validated: which
+-- place this Studio holds, and every place the project declares. Only Sandblock
+-- Code knows a project's config, so the bridge learns the allowlist here — and
+-- an agent can then switch between those places and no others.
+--
 -- Returns (status, message) where status is "ok", "unreachable", or "busy".
-function Net.claim(baseUrl: string, clientId: string): (string, string?)
+function Net.claim(baseUrl: string, clientId: string, claim: any): (string, string?)
 	local ok, response = pcall(function()
 		return HttpService:RequestAsync({
 			Url = clientUrl(baseUrl, "/claim", clientId),
 			Method = "POST",
+			Headers = { ["Content-Type"] = "application/json" },
+			Body = HttpService:JSONEncode(claim or {}),
 		})
 	end)
 	if not ok then
@@ -52,14 +61,15 @@ function Net.claim(baseUrl: string, clientId: string): (string, string?)
 	return "ok", nil
 end
 
--- Long-polls for the next command.
+-- Long-polls for the next command addressed to this Studio's place.
 -- Returns (status, command, message) where status is one of:
 --   "ok"          -- command may be nil (the poll simply timed out)
 --   "unreachable" -- server down or errored; back off and retry
---   "busy"        -- another Studio holds the bridge; message explains it
+--   "busy"        -- another Studio holds this place; message explains it
+--   "reclaim"     -- the bridge forgot us (restart, or a timed-out session)
 function Net.poll(baseUrl: string, clientId: string): (string, any, string?)
 	-- Report the place name so the gateway can pick the right Studio upstream,
-	-- and our session id so the bridge can tell us apart from another Studio.
+	-- and our session id so the bridge can route this place's commands to us.
 	local ok, response = pcall(function()
 		return HttpService:RequestAsync({ Url = clientUrl(baseUrl, "/poll", clientId), Method = "GET" })
 	end)
@@ -67,6 +77,13 @@ function Net.poll(baseUrl: string, clientId: string): (string, any, string?)
 		return "unreachable", nil, nil
 	end
 	if response.StatusCode == 409 then
+		local decoded
+		pcall(function()
+			decoded = HttpService:JSONDecode(response.Body)
+		end)
+		if decoded and decoded.error == "reclaim_required" then
+			return "reclaim", nil, nil
+		end
 		return "busy", nil, busyMessage(response)
 	end
 	if not response.Success then
@@ -76,7 +93,7 @@ function Net.poll(baseUrl: string, clientId: string): (string, any, string?)
 	return "ok", decoded.command, nil
 end
 
--- Gives up the single plugin slot so another Studio can connect right away.
+-- Gives up this Studio's place so it can be reconnected right away.
 function Net.release(baseUrl: string, clientId: string)
 	pcall(function()
 		HttpService:RequestAsync({
