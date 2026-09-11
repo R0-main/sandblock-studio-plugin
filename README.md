@@ -46,7 +46,8 @@ request, so its status does not wait for the first 25-second long-poll response
 before showing **Connected**. One Studio holds a place, so several Studios of the
 same project connect side by side — a lobby and an arena at once — each serving
 only the commands addressed to its own place. A second Studio on the same place
-is refused, and so is a Studio belonging to another project.
+is refused. Studios of different projects connect side by side too; the gateway
+keeps each project's agents inside their own project.
 
 The Components tab renders the library at the same narrow width used by the
 real plugin.
