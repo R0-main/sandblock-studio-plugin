@@ -41,12 +41,8 @@ local function normalizeSettings(candidate: any): (any?, string?)
 	if not isLoopbackUrl(settings.RuntimeBaseUrl) then
 		return nil, "Sandblock Code URL must use http(s)://127.0.0.1:<port> or localhost."
 	end
-	if not isLoopbackUrl(settings.RojoBaseUrl) then
-		return nil, "Rojo URL must use http(s)://127.0.0.1:<port> or localhost."
-	end
 	settings.McpBaseUrl = settings.McpBaseUrl:gsub("/$", "")
 	settings.RuntimeBaseUrl = settings.RuntimeBaseUrl:gsub("/$", "")
-	settings.RojoBaseUrl = settings.RojoBaseUrl:gsub("/$", "")
 
 	if type(settings.ReconnectDelay) ~= "number" then
 		return nil, "Reconnect delay must be a number."
@@ -293,12 +289,18 @@ function Main.start(pluginObject: Plugin, options: any?)
 			return
 		end
 
+		-- Rojo is part of Sandblock Code: the only server this plugin syncs with
+		-- is the one the app serves for the selected project, at the address it
+		-- handed back. There is no port to configure and no server to point at
+		-- by hand — that was how a Rojo off the pinned protocol reached Studio.
+		local baseUrl = rojoUrl
+		if baseUrl == nil then
+			panel.App.SetRojoState("error", "Error", "Choose a project so Sandblock Code can serve it.", false)
+			return
+		end
+
 		rojoRunning = true
 		panel.App.SetRojoState("connecting", "Connecting", nil, true)
-
-		-- Sandblock Code decides which port serves this project; the manual URL
-		-- is only used by the fallback path below.
-		local baseUrl = rojoUrl or settings.RojoBaseUrl
 		panel.App.SetRojoDetail(baseUrl)
 
 		local session
@@ -425,16 +427,8 @@ function Main.start(pluginObject: Plugin, options: any?)
 			end
 			if listed.status ~= "ok" then
 				finish()
-				-- Manual recovery: with no project chosen and the app unavailable,
-				-- the saved Rojo URL still lets someone connect to a server they
-				-- started themselves. It never overrides an explicit project.
-				if selection == nil then
-					rojoUrl = nil
-					panel.App.Notify("Connecting to the manual Rojo URL.", "warning")
-					setRunning(true)
-					setRojoRunning(true)
-					return
-				end
+				-- Without Sandblock Code there is nothing to sync with: it is the
+				-- one serving Rojo.
 				panel.App.SetProject(selection, "unbound", listed.message)
 				return
 			end

@@ -19,10 +19,10 @@ Connecting is project-first:
 1. **Connect** with no project selected opens the picker.
 2. The picker lists the projects registered in Sandblock Code, most relevant
    first, with their main place, Rojo project file, and whether that project is
-   already being served — including by a Rojo someone started by hand, which is
-   reused rather than duplicated. It lists nothing this plugin discovered by itself.
+   already being served. It lists nothing this plugin discovered by itself.
 3. Choosing a project asks Sandblock Code to run the pinned Rojo build in that
-   project's repository and returns the loopback port it was given.
+   project's repository. Sandblock Code serves it back at its own address,
+   `/runtimes/<id>/rojo` — the plugin never learns, or configures, a Rojo port.
 4. The MCP bridge and the fork-owned Rojo session then connect together, and
    **Disconnect** stops both. Stopping the sync in Studio leaves the server
    running; Sandblock Code owns its lifecycle.
@@ -53,12 +53,11 @@ The Components tab renders the library at the same narrow width used by the
 real plugin.
 
 The Settings tab persists local connection overrides through Roblox plugin
-settings. It exposes the MCP gateway URL, the Sandblock Code runtime URL, the
-manual Rojo fallback URL, reconnect delay, two-way sync, fallback behavior,
-payload validation, external script opening, and Rojo timing logs. Saving while
-connected restarts both services with the new values; non-loopback endpoints are
-rejected. The manual Rojo URL is used only when no project is selected and the
-runtime service cannot be reached — a server someone started by hand.
+settings. It exposes the MCP gateway URL, reconnect delay, two-way sync, fallback
+behavior, payload validation, external script opening, and Rojo timing logs.
+Saving while connected restarts both services with the new values; non-loopback
+endpoints are rejected. There is no Rojo URL: Rojo is part of Sandblock Code, so
+a Rojo started by hand is never synced with.
 
 `src/UI/Components.lua` is parent-agnostic and can mount its native
 `GuiObject`s under a dock widget, `ScreenGui`, or another GUI container. It

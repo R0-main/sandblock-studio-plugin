@@ -288,18 +288,6 @@ function App.mount(parent: Instance, options: any?)
 		end,
 		Theme = theme,
 	})
-	local rojoLabel = makeLabel(endpoints.Content, theme, "Rojo server URL")
-	rojoLabel.FontFace = theme.Font.Semibold
-	local rojoInput = Components.TextInput({
-		Parent = endpoints.Content,
-		Name = "RojoBaseUrl",
-		Text = tostring(draftSettings.RojoBaseUrl or ""),
-		Placeholder = "http://127.0.0.1:34872",
-		OnChanged = function(value: string)
-			draftSettings.RojoBaseUrl = value
-		end,
-		Theme = theme,
-	})
 	local delayLabel = makeLabel(endpoints.Content, theme, "MCP reconnect delay (seconds)")
 	delayLabel.FontFace = theme.Font.Semibold
 	local delayInput = Components.TextInput({
@@ -410,7 +398,6 @@ function App.mount(parent: Instance, options: any?)
 		OnActivated = function()
 			draftSettings = table.clone(defaultSettings)
 			mcpInput.SetText(tostring(draftSettings.McpBaseUrl or ""))
-			rojoInput.SetText(tostring(draftSettings.RojoBaseUrl or ""))
 			delayInput.SetText(tostring(draftSettings.ReconnectDelay or 2))
 			twoWaySync.SetChecked(draftSettings.TwoWaySync == true, true)
 			syncFallback.SetChecked(draftSettings.EnableSyncFallback == true, true)
