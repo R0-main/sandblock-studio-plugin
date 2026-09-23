@@ -18,14 +18,23 @@ Connecting is project-first:
 
 1. **Connect** with no project selected opens the picker.
 2. The picker lists the projects registered in Sandblock Code, most relevant
-   first, with their main place, Rojo project file, and whether that project is
-   already being served. It lists nothing this plugin discovered by itself.
-3. Choosing a project asks Sandblock Code to run the pinned Rojo build in that
-   project's repository. Sandblock Code serves it back at its own address,
-   `/runtimes/<id>/rojo` — the plugin never learns, or configures, a Rojo port.
+   first, with the declared place this Studio has open (or the main place), the
+   Rojo project file that place syncs, and whether it is already being served.
+   It lists nothing this plugin discovered by itself.
+3. Choosing a project sends this Studio's `PlaceId` to Sandblock Code, which
+   runs the pinned Rojo build for the Rojo project *that place* declares — a
+   lobby and a game of one experience can each sync their own tree. Sandblock
+   Code serves it back at its own address,
+   `/runtimes/<id>/places/<key>/rojo` — the plugin never learns, or configures,
+   a Rojo port. A place the project does not declare gets no session at all.
 4. The MCP bridge and the fork-owned Rojo session then connect together, and
    **Disconnect** stops both. Stopping the sync in Studio leaves the server
    running; Sandblock Code owns its lifecycle.
+
+Once Rojo connects, the plugin reports the DataModel name it synced, and
+Sandblock Code checks it against the `name` of the Rojo project the place
+declares. On a mismatch — another place's tree running here — the plugin stops
+the sync and the Rojo row shows the expected and received project files.
 
 While a session is live the Rojo row shows how fresh the sync is — **Synced just
 now**, then **12 seconds ago**, **2 minutes ago**, in Rojo's own wording — with

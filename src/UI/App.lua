@@ -610,20 +610,34 @@ function App.mount(parent: Instance, options: any?)
 		end
 	end
 
+	-- The declared place this Studio has open, when the runtime declares it:
+	-- its Rojo project is the one a connect would sync, not the main place's.
+	local function thisPlace(runtime: any): any?
+		for _, place in runtime.places or {} do
+			if tonumber(place.placeId) == game.PlaceId then
+				return place
+			end
+		end
+		return nil
+	end
+
 	local function describeRuntime(runtime: any): string
 		local parts = {}
-		if runtime.mainPlaceId then
+		local place = thisPlace(runtime)
+		if place then
+			table.insert(parts, string.format("This place: %s", tostring(place.name)))
+		elseif runtime.mainPlaceId then
 			table.insert(parts, "Main place " .. tostring(runtime.mainPlaceId))
 		else
 			table.insert(parts, "No place bound")
 		end
-		if runtime.projectFile then
-			table.insert(parts, tostring(runtime.projectFile))
+		local projectFile = if place then place.projectFile else runtime.projectFile
+		if projectFile then
+			table.insert(parts, tostring(projectFile))
 		end
-		local rojo = runtime.rojo
-		if rojo and (rojo.state == "running" or rojo.state == "external") then
-			local prefix = if rojo.state == "external" then "already served on " else "serving on "
-			table.insert(parts, prefix .. tostring(rojo.url))
+		local rojo = if place then place.rojo else runtime.rojo
+		if rojo and rojo.state == "running" then
+			table.insert(parts, "serving on " .. tostring(rojo.url))
 		end
 		if runtime.issue then
 			table.insert(parts, tostring(runtime.issue))
@@ -658,10 +672,7 @@ function App.mount(parent: Instance, options: any?)
 					Parent = pickerList,
 					Name = "Runtime" .. index,
 					LayoutOrder = index,
-					Icon = if runtime.rojo
-							and (runtime.rojo.state == "running" or runtime.rojo.state == "external")
-						then "▶"
-						else "◇",
+					Icon = if ((thisPlace(runtime) or runtime).rojo or {}).state == "running" then "▶" else "◇",
 					Text = tostring(runtime.displayName),
 					Description = describeRuntime(runtime),
 					Selected = isSelected,

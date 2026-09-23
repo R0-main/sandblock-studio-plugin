@@ -103,8 +103,10 @@ function Main.start(pluginObject: Plugin, options: any?)
 	-- The project this panel acts on. Only Sandblock Code can turn the id back
 	-- into a repository, so remembering it here leaks no path.
 	local selection: any = nil
-	-- Loopback URL of the Rojo server Sandblock Code started for `selection`.
+	-- Loopback route of the Rojo server Sandblock Code started for the place
+	-- this Studio has open, and the project file behind it.
 	local rojoUrl: string? = nil
+	local rojoProjectFile: string? = nil
 	-- The declared place this Studio holds, and the list it belongs to. Sent to
 	-- the bridge on every claim: it is what lets several Studios share the
 	-- gateway, one per place, and what bounds where an agent can switch to.
@@ -196,13 +198,32 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end,
 	})
 
+	-- A place as the bridge needs it: the descriptor also carries Rojo and
+	-- sync state the gateway has no use for.
+	local function claimPlace(place: any): any
+		if place == nil then
+			return nil
+		end
+		return {
+			key = place.key,
+			name = place.name,
+			placeId = place.placeId,
+			main = place.main,
+			projectFile = place.projectFile,
+		}
+	end
+
 	-- What this Studio tells the bridge about itself when it claims its place.
 	local function claimPayload(): any
+		local places = {}
+		for _, place in declaredPlaces do
+			table.insert(places, claimPlace(place))
+		end
 		return {
 			runtimeId = selection and selection.runtimeId,
 			projectName = selection and selection.displayName,
-			place = heldPlace,
-			places = declaredPlaces,
+			place = claimPlace(heldPlace),
+			places = places,
 		}
 	end
 
@@ -337,11 +358,31 @@ function Main.start(pluginObject: Plugin, options: any?)
 				elseif status == RojoAdapter.Status.Connected then
 					local projectName = tostring(detail)
 					panel.App.SetRojoState("connected", "Connected", nil, true)
-					panel.App.SetRojoDetail(string.format("%s · %s", projectName, baseUrl))
+					panel.App.SetRojoDetail(string.format("%s · %s", projectName, rojoProjectFile or baseUrl))
 					panel.App.MarkSynced({ projectName = projectName })
 					panel.App.Notify("Rojo connected to " .. projectName .. ".", "success")
-					reportEvent("connected", { projectName = projectName, url = baseUrl })
 					print("[Sandblock Rojo] connected to " .. projectName)
+					-- Sandblock Code checks the synced tree against the one this
+					-- place declares. A mismatch is another place's code running
+					-- here, so the sync stops and says which file it should be.
+					local runtimeId = selection and selection.runtimeId
+					if runtimeId then
+						task.spawn(function()
+							local reply = Runtime.report(
+								settings.RuntimeBaseUrl,
+								runtimeId,
+								{ kind = "connected", projectName = projectName, url = baseUrl }
+							)
+							if destroyed or rojoSession ~= session or reply.code ~= "wrong_project" then
+								return
+							end
+							local message = tostring(reply.message)
+							warn("[Sandblock Rojo] " .. message)
+							setRojoRunning(false)
+							panel.App.SetRojoState("error", "Wrong project", message, false)
+							panel.App.Notify(message, "error")
+						end)
+					end
 				elseif status == RojoAdapter.Status.Disconnected then
 					rojoSession = nil
 					rojoRunning = false
@@ -470,9 +511,12 @@ function Main.start(pluginObject: Plugin, options: any?)
 				return
 			end
 
+			-- The session of the place this Studio has open, never the
+			-- project's main one: a lobby and a game can sync different trees.
 			local descriptor = started.runtime
-			local rojo = descriptor and descriptor.rojo
+			local rojo = started.rojo
 			rojoUrl = rojo and rojo.url or nil
+			rojoProjectFile = started.projectFile
 			if rojoUrl == nil then
 				finish()
 				panel.App.SetProject(
@@ -491,7 +535,14 @@ function Main.start(pluginObject: Plugin, options: any?)
 			end
 
 			finish()
-			print(string.format("[Sandblock] %s serving on %s", tostring(descriptor.displayName), rojoUrl))
+			print(
+				string.format(
+					"[Sandblock] %s serving %s on %s",
+					tostring(descriptor.displayName),
+					tostring(rojoProjectFile),
+					rojoUrl
+				)
+			)
 			setRunning(true)
 			setRojoRunning(true)
 		end)
@@ -516,6 +567,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 			connecting = false
 			panel.App.SetBusy(false)
 			rojoUrl = nil
+			rojoProjectFile = nil
 			setRunning(false)
 			setRojoRunning(false)
 			return

@@ -2,8 +2,8 @@
 -- Client for Sandblock Code's local runtime service.
 --
 -- The plugin never knows a repository path. It asks the desktop app which
--- projects are approved, then asks it to serve one; the app answers with the
--- loopback URL its own Rojo process is listening on.
+-- projects are approved, then asks it to serve the place this Studio has open;
+-- the app answers with the loopback route of the Rojo project that place syncs.
 
 local HttpService = game:GetService("HttpService")
 
@@ -18,6 +18,13 @@ type Result = {
 	status: string, -- "ok" | "unreachable" | "error"
 	runtimes: { any }?,
 	runtime: any?,
+	-- What `start` adds: the declared place this Studio matched, the Rojo
+	-- project file it syncs, and that file's session.
+	place: any?,
+	projectFile: string?,
+	rojo: any?,
+	-- The service's error code, e.g. "wrong_project" or "place_not_declared".
+	code: string?,
 	message: string?,
 }
 
@@ -50,11 +57,19 @@ local function requestJson(url: string, method: string, body: any?): Result
 	if not response.Success then
 		return {
 			status = "error",
+			code = decoded and decoded.error,
 			message = (decoded and decoded.message)
 				or string.format("Runtime service replied %d.", response.StatusCode),
 		}
 	end
-	return { status = "ok", runtimes = decoded and decoded.runtimes, runtime = decoded and decoded.runtime }
+	return {
+		status = "ok",
+		runtimes = decoded and decoded.runtimes,
+		runtime = decoded and decoded.runtime,
+		place = decoded and decoded.place,
+		projectFile = decoded and decoded.projectFile,
+		rojo = decoded and decoded.rojo,
+	}
 end
 
 -- Lists the projects registered in Sandblock Code, most relevant first.
@@ -66,12 +81,17 @@ function Runtime.list(baseUrl: string): Result
 	return result
 end
 
--- Asks Sandblock Code to serve a project with the pinned Rojo build.
+-- Asks Sandblock Code to serve the place this Studio has open, with the
+-- pinned Rojo build.
+--
+-- The PlaceId is what picks the Rojo project: places of one experience can
+-- each sync their own tree, and the app refuses a place the project does not
+-- declare rather than handing it the main place's.
 function Runtime.start(baseUrl: string, runtimeId: string): Result
 	local url = baseUrl .. "/runtimes/" .. HttpService:UrlEncode(runtimeId) .. "/start"
-	local result = requestJson(url, "POST")
-	if result.status == "ok" and type(result.runtime) ~= "table" then
-		return { status = "error", message = "Sandblock Code did not return a runtime descriptor." }
+	local result = requestJson(url, "POST", { placeId = game.PlaceId })
+	if result.status == "ok" and (type(result.runtime) ~= "table" or type(result.rojo) ~= "table") then
+		return { status = "error", message = "Sandblock Code did not return this place's Rojo session." }
 	end
 	return result
 end
