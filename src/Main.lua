@@ -10,6 +10,7 @@ local Net = require(script.Parent.Net)
 local Util = require(script.Parent.Util)
 local Handlers = require(script.Parent.Handlers)
 local Runtime = require(script.Parent.Runtime)
+local RojoState = require(script.Parent.RojoState)
 local UI = require(script.Parent.UI)
 local RojoAdapter = require(script.Parent.Rojo.Plugin.SandblockAdapter)
 
@@ -299,6 +300,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 
 		if not value then
 			rojoRunning = false
+			RojoState.clear()
 			local session = rojoSession
 			rojoSession = nil
 			if session then
@@ -340,7 +342,13 @@ function Main.start(pluginObject: Plugin, options: any?)
 				end
 			end,
 			onPatch = function(summary: any)
-				if destroyed or rojoSession ~= session or summary.appliedCount == 0 then
+				if destroyed or rojoSession ~= session then
+					return
+				end
+				-- Even an empty patch carries the map: the initial sync of an
+				-- unchanged tree is how package handlers learn what Rojo owns.
+				RojoState.set(baseUrl, summary.instanceMap)
+				if summary.appliedCount == 0 then
 					return
 				end
 				local status = if summary.hasUnapplied then "warning" else "success"
@@ -384,6 +392,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 						end)
 					end
 				elseif status == RojoAdapter.Status.Disconnected then
+					RojoState.clear()
 					rojoSession = nil
 					rojoRunning = false
 					reportEvent("disconnected", if detail ~= nil then { error = tostring(detail) } else nil)
