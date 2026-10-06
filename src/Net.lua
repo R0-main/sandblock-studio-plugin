@@ -11,13 +11,14 @@ local Net = {}
 -- is empty for a place that was never published, so we fall back on PlaceId and
 -- the place name to keep the string as discriminating as possible. A Sandblock
 -- copy has PlaceId 0 and, once Rojo has synced, its project's name, like every
--- other copy of the place, so it adds the file it was opened from.
+-- other copy of the place, so it reads the file it was opened from instead of
+-- the name: that file is unique to the copy and, unlike `game.Name`, does not
+-- change when Rojo renames the DataModel after this Studio has connected.
 --
 -- Must stay identical to FINGERPRINT_LUAU in sandblock-code/src/activateStudio.ts.
 local function fingerprint(): string
-	local copyFile = Runtime.copyFile()
-	local base = string.format("%s|%s|%s", game.JobId, tostring(game.PlaceId), game.Name)
-	return if copyFile then base .. "|" .. copyFile else base
+	local name = Runtime.copyFile() or game.Name
+	return string.format("%s|%s|%s", game.JobId, tostring(game.PlaceId), name)
 end
 
 local function clientUrl(baseUrl: string, path: string, clientId: string): string
