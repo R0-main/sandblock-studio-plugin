@@ -18,6 +18,7 @@ local AssetService = game:GetService("AssetService")
 local Selection = game:GetService("Selection")
 local RunService = game:GetService("RunService")
 local ScriptEditorService = game:GetService("ScriptEditorService")
+local StudioService = game:GetService("StudioService")
 
 local Util = require(script.Parent.Parent.Util)
 
@@ -117,20 +118,13 @@ return function(args: any): any
 	local previousSelection = Selection:Get()
 	Selection:Set({}) -- hide resize handles
 
-	-- Remember which script tabs are open so we can restore focus afterward.
-	-- Studio exposes no API for the *active* tab or to focus the 3D viewport,
-	-- so this is best-effort: if no scripts were open the user was on the
-	-- viewport (closing our temp tab returns there); otherwise we re-focus a
-	-- previously-open script.
-	local openScriptsBefore = {}
-	for _, doc in ipairs(ScriptEditorService:GetScriptDocuments()) do
-		if not doc:IsCommandBar() then
-			local scr = doc:GetScript()
-			if scr then
-				table.insert(openScriptsBefore, scr)
-			end
-		end
-	end
+	-- Remember the focused script tab, if any, so cleanup can put focus back.
+	-- ActiveScript is nil while the 3D viewport is active, and then focus must
+	-- end up back there: capture_turntable, get_model_icon and
+	-- view_raw_workspace refuse to run while a script tab is focused. Merely
+	-- *open* scripts say nothing about focus -- re-focusing one of those left a
+	-- background script tab active and broke the next viewport capture.
+	local previousActiveScript = StudioService.ActiveScript
 
 	-- Switch focus off the 3D viewport (capture is garbage when it is active).
 	local focusScript = Instance.new("Script")
@@ -157,13 +151,17 @@ return function(args: any): any
 		focusScript:Destroy()
 		Selection:Set(previousSelection)
 
-		-- Restore editor focus. If scripts were open before, return to one of
-		-- them; if none were, closing our temp tab already dropped us back on
-		-- the 3D viewport (no API exists to focus the viewport explicitly).
-		if #openScriptsBefore > 0 then
+		-- Restore editor focus. A focused script gets its tab back; otherwise
+		-- closing our temp tab is the only way back to the viewport (no API
+		-- focuses it explicitly), so say so if Studio landed on a script tab.
+		if previousActiveScript then
 			pcall(function()
-				ScriptEditorService:OpenScriptDocumentAsync(openScriptsBefore[1])
+				ScriptEditorService:OpenScriptDocumentAsync(previousActiveScript)
 			end)
+		elseif StudioService.ActiveScript then
+			warn(
+				"[Sandblock] render_gui_element could not return focus to the 3D viewport — click the viewport tab before the next 3D capture"
+			)
 		end
 	end
 
