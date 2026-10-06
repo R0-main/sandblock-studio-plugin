@@ -14,6 +14,23 @@ local Runtime = {}
 -- developer's projects or spawn servers. Studio's HttpService can.
 local HEADERS = { ["X-Sandblock-Runtime"] = "1", ["Content-Type"] = "application/json" }
 
+-- The file name a Sandblock copy was opened from, kept on the DataModel.
+--
+-- Sandblock Code recognises a copy by the ticket in its file name, which Studio
+-- uses as `game.Name` -- until Rojo's first sync renames the DataModel after its
+-- project. Kept here, the name still identifies the copy afterwards: to the
+-- service on a later hello, and in the fingerprint the gateway matches
+-- against StudioMCP, where every copy would otherwise read `|0|<project name>`.
+local COPY_FILE_ATTRIBUTE = "SandblockCopyFile"
+
+function Runtime.copyFile(): string?
+	local ok, value = pcall(game.GetAttribute, game, COPY_FILE_ATTRIBUTE)
+	if ok and type(value) == "string" and value ~= "" then
+		return value
+	end
+	return nil
+end
+
 type Result = {
 	status: string, -- "ok" | "unreachable" | "error"
 	runtimes: { any }?,
@@ -118,7 +135,8 @@ end
 -- Returns a result whose `connect` is true with a `runtimeId` (and a `copy`
 -- when `reason` is "copy"), or false.
 function Runtime.hello(baseUrl: string): Result
-	local result = requestJson(baseUrl .. "/studios/hello", "POST", { placeId = game.PlaceId, placeName = game.Name })
+	local placeName = Runtime.copyFile() or game.Name
+	local result = requestJson(baseUrl .. "/studios/hello", "POST", { placeId = game.PlaceId, placeName = placeName })
 	if result.status ~= "ok" then
 		return result
 	end
@@ -128,6 +146,9 @@ function Runtime.hello(baseUrl: string): Result
 	local copy = if result.reason == "copy" then readCopy(result.copy) else nil
 	if type(result.runtimeId) ~= "string" or result.runtimeId == "" or (result.reason == "copy" and copy == nil) then
 		return { status = "error", message = "Sandblock Code returned an unexpected connection answer." }
+	end
+	if copy ~= nil then
+		pcall(game.SetAttribute, game, COPY_FILE_ATTRIBUTE, placeName)
 	end
 	return { status = "ok", connect = true, runtimeId = result.runtimeId, reason = result.reason, copy = copy }
 end

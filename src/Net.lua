@@ -1,15 +1,23 @@
 -- Networking against the local MCP bridge.
 local HttpService = game:GetService("HttpService")
 
+local Runtime = require(script.Parent.Runtime)
+
 local Net = {}
 
 -- Identifies this Studio session in a way the *upstream* StudioMCP can also
 -- read (via `execute_luau`), which is what lets the gateway pick the Studio our
 -- plugin lives in when several are open. JobId alone is a per-session GUID but
 -- is empty for a place that was never published, so we fall back on PlaceId and
--- the place name to keep the string as discriminating as possible.
+-- the place name to keep the string as discriminating as possible. A Sandblock
+-- copy has PlaceId 0 and, once Rojo has synced, its project's name, like every
+-- other copy of the place, so it adds the file it was opened from.
+--
+-- Must stay identical to FINGERPRINT_LUAU in sandblock-code/src/activateStudio.ts.
 local function fingerprint(): string
-	return string.format("%s|%s|%s", game.JobId, tostring(game.PlaceId), game.Name)
+	local copyFile = Runtime.copyFile()
+	local base = string.format("%s|%s|%s", game.JobId, tostring(game.PlaceId), game.Name)
+	return if copyFile then base .. "|" .. copyFile else base
 end
 
 local function clientUrl(baseUrl: string, path: string, clientId: string): string
