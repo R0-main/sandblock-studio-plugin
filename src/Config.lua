@@ -21,4 +21,7 @@ return {
 	PluginIcon = "rbxassetid://82545901411321",
 	-- Seconds to back off when the MCP server is unreachable.
 	ReconnectDelay = 2,
+	-- Seconds between two questions to Sandblock Code about whether this
+	-- Studio should connect, while it is not connected.
+	AutoConnectInterval = 10,
 }

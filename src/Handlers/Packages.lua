@@ -7,7 +7,8 @@
 -- `{ ok = false, code, message, retryable }` for a refusal the agent can act on.
 --
 -- Every command carries the PlaceId the gateway resolved, and nothing is read
--- or changed in a Studio holding another place.
+-- or changed in a Studio holding another place. A Sandblock copy of a place is a
+-- local file, so commands to it carry PlaceId 0.
 local HttpService = game:GetService("HttpService")
 local InsertService = game:GetService("InsertService")
 local AssetService = game:GetService("AssetService")
@@ -59,14 +60,39 @@ local function assertPlace(args: any)
 	end
 end
 
-local function creatorOf(): { type: string, id: number }
-	if game.CreatorId <= 0 then
+-- The owner a package is read and published as: the place's own.
+--
+-- A Sandblock copy is a local file with no owner (CreatorId 0). The gateway
+-- then names one in `args.creator`, taken from the other side of the transfer,
+-- which is a place the project declares; a place with an owner ignores it.
+local function creatorOf(args: any): { type: string, id: number }
+	if game.CreatorId > 0 then
+		return {
+			type = if game.CreatorType == Enum.CreatorType.Group then "Group" else "User",
+			id = game.CreatorId,
+		}
+	end
+	local given = args.creator
+	if game.PlaceId ~= 0 or given == nil then
 		refuse("place_not_published", "This place has no Roblox owner yet. Publish it before moving models.")
 	end
-	return {
-		type = if game.CreatorType == Enum.CreatorType.Group then "Group" else "User",
-		id = game.CreatorId,
-	}
+	local creatorType = type(given) == "table" and given.creatorType
+	local id = type(given) == "table" and tonumber(given.creatorId)
+	if (creatorType ~= "User" and creatorType ~= "Group") or not id or id <= 0 or id % 1 ~= 0 then
+		refuse("invalid_arguments", "creator must have a creatorType of User or Group and a positive whole creatorId.")
+	end
+	return { type = creatorType :: string, id = id :: number }
+end
+
+-- The id an inserted root is marked with, so the transfer's setup script finds
+-- it under the destination by this attribute rather than by a path two
+-- transfers could share. The gateway sends one only when a setup will run and
+-- remove it; `transferId` stays the shuttle's own check.
+local function markIdOf(args: any): string?
+	if args.markId ~= nil and type(args.markId) ~= "string" then
+		refuse("invalid_arguments", "markId must be a string.")
+	end
+	return args.markId
 end
 
 local function resolveModel(path: any): Instance
@@ -276,7 +302,7 @@ Packages.package_inspect_source = handler(function(args)
 	assertPlace(args)
 	local model = resolveModel(args.modelPath)
 	return {
-		creator = creatorOf(),
+		creator = creatorOf(args),
 		universeId = game.GameId,
 		name = model.Name,
 		className = model.ClassName,
@@ -288,7 +314,7 @@ Packages.package_inspect_destination = handler(function(args)
 	assertPlace(args)
 	local destination = resolveDestination(args.destinationPath)
 	return {
-		creator = creatorOf(),
+		creator = creatorOf(args),
 		universeId = game.GameId,
 		destination = destination:GetFullName(),
 		rojo = checkRojo(destination, args.rojoProject),
@@ -301,7 +327,7 @@ end)
 Packages.package_publish = handler(function(args)
 	assertPlace(args)
 	local model = resolveModel(args.modelPath)
-	local creator = creatorOf()
+	local creator = creatorOf(args)
 	local mode = args.mode
 	if mode ~= "transfer" and mode ~= "dedicated" and mode ~= "version" then
 		refuse("invalid_arguments", "Unknown publication mode " .. tostring(mode) .. ".")
@@ -411,6 +437,7 @@ end
 
 Packages.package_insert = handler(function(args)
 	assertPlace(args)
+	local markId = markIdOf(args)
 	local destination = resolveDestination(args.destinationPath)
 	checkRojo(destination, args.rojoProject)
 	local assetId = tonumber(args.assetId)
@@ -442,6 +469,10 @@ Packages.package_insert = handler(function(args)
 		return recorded("Sandblock: insert package", function()
 			local paths = {}
 			for _, root in ipairs(roots) do
+				-- On the model itself: the shuttle's envelope is discarded below.
+				if markId ~= nil then
+					root:SetAttribute(TRANSFER_ID_ATTRIBUTE, markId)
+				end
 				root.Parent = destination
 				table.insert(paths, root:GetFullName())
 			end
@@ -467,11 +498,15 @@ end)
 -- A source and destination in the same place: an ordinary clone.
 Packages.package_clone_local = handler(function(args)
 	assertPlace(args)
+	local markId = markIdOf(args)
 	local model = resolveModel(args.modelPath)
 	local destination = resolveDestination(args.destinationPath)
 	checkRojo(destination, args.rojoProject)
 	return recorded("Sandblock: copy model", function()
 		local copy = model:Clone()
+		if markId ~= nil then
+			copy:SetAttribute(TRANSFER_ID_ATTRIBUTE, markId)
+		end
 		copy.Parent = destination
 		return { insertedPath = copy:GetFullName(), className = copy.ClassName }
 	end)

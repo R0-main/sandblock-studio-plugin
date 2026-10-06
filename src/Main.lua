@@ -4,6 +4,7 @@
 -- ReplicatedStorage development loader use the exact same implementation.
 
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
 local Config = require(script.Parent.Config)
 local Net = require(script.Parent.Net)
@@ -114,6 +115,22 @@ function Main.start(pluginObject: Plugin, options: any?)
 	local heldPlace: any = nil
 	local declaredPlaces: { any } = {}
 	local connecting = false
+	-- Bumped whenever a connect attempt is abandoned, so one still waiting on
+	-- Sandblock Code cannot finish after a disconnect or a newer attempt.
+	local connectGeneration = 0
+	-- Set when the person disconnects by hand, or when an automatic connect is
+	-- refused: for the rest of this Studio session only a click connects again.
+	local autoConnectStopped = false
+	-- The copy this Studio is, once Sandblock Code has recognised it, and the
+	-- runtime it belongs to. A copy is a local file with PlaceId 0; only its
+	-- file name, which Studio uses as `game.Name`, tells it apart.
+	local knownCopy: any = nil
+
+	-- The key a copy reports itself with; nil while this Studio holds a real
+	-- place, which its PlaceId already names.
+	local function heldCopyKey(): string?
+		return if heldPlace ~= nil and heldPlace.copyOf ~= nil then heldPlace.key else nil
+	end
 
 	local function loadSelection(): any
 		local saved
@@ -147,8 +164,9 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end
 		local event = if payload then table.clone(payload) else {}
 		event.kind = kind
+		local copyKey = heldCopyKey()
 		task.spawn(function()
-			Runtime.report(settings.RuntimeBaseUrl, runtimeId, event)
+			Runtime.report(settings.RuntimeBaseUrl, runtimeId, event, copyKey)
 		end)
 	end
 
@@ -186,6 +204,10 @@ function Main.start(pluginObject: Plugin, options: any?)
 		InitialSettings = settings,
 		DefaultSettings = Config.DefaultSettings,
 		OnToggleConnection = function(value: boolean)
+			-- A click is the person's own decision: disconnecting keeps this
+			-- Studio from connecting by itself again this session, connecting
+			-- lets it.
+			autoConnectStopped = not value
 			setAllRunning(value)
 		end,
 		OnChooseProject = function()
@@ -204,6 +226,18 @@ function Main.start(pluginObject: Plugin, options: any?)
 	local function claimPlace(place: any): any
 		if place == nil then
 			return nil
+		end
+		if place.copyOf ~= nil then
+			-- A copy has no PlaceId: the bridge knows it by its key, and by the
+			-- declared place and version it was made from.
+			return {
+				key = place.key,
+				name = place.name,
+				main = false,
+				copyOf = place.copyOf,
+				version = place.version,
+				projectFile = place.projectFile,
+			}
 		end
 		return {
 			key = place.key,
@@ -248,6 +282,8 @@ function Main.start(pluginObject: Plugin, options: any?)
 				-- *different* declared places connect side by side.
 				local detail = tostring(message) .. " Stop the bridge in the other Studio, then retry from this panel."
 				warn("[Sandblock] " .. detail)
+				-- Asking again by itself would only collide with that Studio.
+				autoConnectStopped = true
 				setAllRunning(false)
 				panel.App.SetBridgeState("busy", detail, false)
 			elseif status == "reclaim" then
@@ -375,11 +411,13 @@ function Main.start(pluginObject: Plugin, options: any?)
 					-- here, so the sync stops and says which file it should be.
 					local runtimeId = selection and selection.runtimeId
 					if runtimeId then
+						local copyKey = heldCopyKey()
 						task.spawn(function()
 							local reply = Runtime.report(
 								settings.RuntimeBaseUrl,
 								runtimeId,
-								{ kind = "connected", projectName = projectName, url = baseUrl }
+								{ kind = "connected", projectName = projectName, url = baseUrl },
+								copyKey
 							)
 							if destroyed or rojoSession ~= session or reply.code ~= "wrong_project" then
 								return
@@ -415,16 +453,20 @@ function Main.start(pluginObject: Plugin, options: any?)
 	end
 
 	-- Applies a runtime descriptor to the panel and remembers it for next time.
-	local function applySelection(runtime: any)
+	-- A copy is disposable, so connecting one leaves the remembered project as
+	-- the next Studio on a real place expects it.
+	local function applySelection(runtime: any, copy: any?)
 		selection = runtime
-		saveSelection(runtime)
+		if copy == nil then
+			saveSelection(runtime)
+		end
 		if runtime == nil then
 			heldPlace = nil
 			declaredPlaces = {}
 			panel.App.SetProject(nil)
 			return "unbound", nil
 		end
-		local placeState, place, placeMessage = Runtime.resolvePlace(runtime)
+		local placeState, place, placeMessage = Runtime.resolvePlace(runtime, copy)
 		heldPlace = place
 		declaredPlaces = Runtime.declaredPlaces(runtime)
 		panel.App.SetProject(runtime, placeState, placeMessage, place)
@@ -433,7 +475,8 @@ function Main.start(pluginObject: Plugin, options: any?)
 
 	panel.App.SetBridgeDetail(settings.McpBaseUrl)
 	if selection then
-		-- Only the remembered name; nothing is verified until the user connects.
+		-- Only the remembered name; nothing is verified until this Studio
+		-- connects, by hand or by itself.
 		panel.App.SetProject(selection)
 	end
 
@@ -456,27 +499,64 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end)
 	end
 
+	-- The copy this Studio is for `runtimeId`, if it is one. A Studio with no
+	-- PlaceId that Sandblock Code has not recognised yet asks first, so a copy
+	-- connected by hand still connects as the copy, not as an unpublished
+	-- place. For PlaceId 0 the question has no side effect: no project declares
+	-- that place and nothing launches it.
+	local function copyFor(runtimeId: string): any?
+		if knownCopy == nil and game.PlaceId == 0 then
+			local answer = Runtime.hello(settings.RuntimeBaseUrl)
+			if answer.status == "ok" and answer.copy ~= nil then
+				knownCopy = { runtimeId = answer.runtimeId, copy = answer.copy }
+			end
+		end
+		if knownCopy ~= nil and knownCopy.runtimeId == runtimeId then
+			return knownCopy.copy
+		end
+		return nil
+	end
+
 	-- Starts this project's Rojo server through Sandblock Code, then connects
-	-- both local services to it.
-	local function connectTo(runtimeId: string)
+	-- both local services to it. `automatic` marks a connect Sandblock Code
+	-- asked for rather than a click.
+	local function connectTo(runtimeId: string, automatic: boolean?)
 		if destroyed or connecting then
 			return
 		end
 		connecting = true
+		connectGeneration += 1
+		local attempt = connectGeneration
 		panel.App.SetBusy(true)
 		task.spawn(function()
+			-- A disconnect, a newer attempt, or a reload took over meanwhile and
+			-- owns the panel now.
+			local function superseded(): boolean
+				return destroyed or connectGeneration ~= attempt
+			end
 			local function finish()
 				connecting = false
 				panel.App.SetBusy(false)
 			end
+			-- Sandblock Code refused what it had just offered. Asking again every
+			-- few seconds would only repeat the refusal, so a click takes over.
+			local function refused()
+				finish()
+				if automatic then
+					autoConnectStopped = true
+				end
+			end
 
 			local listed = Runtime.list(settings.RuntimeBaseUrl)
-			if destroyed then
-				finish()
+			if superseded() then
 				return
 			end
 			if listed.status ~= "ok" then
 				finish()
+				if automatic then
+					-- The app just answered; the next attempt will tell.
+					return
+				end
 				-- Without Sandblock Code there is nothing to sync with: it is the
 				-- one serving Rojo.
 				panel.App.SetProject(selection, "unbound", listed.message)
@@ -491,7 +571,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 				end
 			end
 			if runtime == nil then
-				finish()
+				refused()
 				applySelection(nil)
 				panel.App.SetProject(
 					nil,
@@ -501,21 +581,31 @@ function Main.start(pluginObject: Plugin, options: any?)
 				return
 			end
 
-			local placeState = applySelection(runtime)
+			local copy = copyFor(runtimeId)
+			if superseded() then
+				return
+			end
+			local placeState = applySelection(runtime, copy)
 			if placeState == "mismatch" then
 				-- Refusing before anything starts keeps a sync from writing this
 				-- project's tree into a place nobody declared.
-				finish()
+				refused()
 				return
 			end
 
-			local started = Runtime.start(settings.RuntimeBaseUrl, runtimeId)
-			if destroyed then
-				finish()
+			local started = Runtime.start(settings.RuntimeBaseUrl, runtimeId, copy and copy.key)
+			if superseded() then
 				return
 			end
 			if started.status ~= "ok" then
-				finish()
+				if started.status ~= "unreachable" then
+					refused()
+				elseif automatic then
+					finish()
+					return
+				else
+					finish()
+				end
 				panel.App.SetProject(runtime, placeState, started.message, heldPlace)
 				return
 			end
@@ -527,7 +617,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 			rojoUrl = rojo and rojo.url or nil
 			rojoProjectFile = started.projectFile
 			if rojoUrl == nil then
-				finish()
+				refused()
 				panel.App.SetProject(
 					runtime,
 					placeState,
@@ -561,7 +651,10 @@ function Main.start(pluginObject: Plugin, options: any?)
 		if destroyed or runtime == nil then
 			return
 		end
-		if running or rojoRunning then
+		-- Choosing a project is connecting by hand, and it replaces whatever
+		-- this Studio was connected or connecting to.
+		autoConnectStopped = false
+		if running or rojoRunning or connecting then
 			setAllRunning(false)
 		end
 		applySelection(runtime)
@@ -574,6 +667,7 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end
 		if not value then
 			connecting = false
+			connectGeneration += 1
 			panel.App.SetBusy(false)
 			rojoUrl = nil
 			rojoProjectFile = nil
@@ -627,8 +721,36 @@ function Main.start(pluginObject: Plugin, options: any?)
 	table.insert(connections, panel.Widget:GetPropertyChangedSignal("Enabled"):Connect(updateToolbarState))
 	updateToolbarState()
 
-	-- Deliberately does *not* auto-start: opening a place should not connect the
-	-- bridge or Rojo. One explicit action starts both local services together.
+	-- Automatic connection. Sandblock Code decides whether this Studio connects
+	-- — a copy it opened, a place it launched moments ago, or a place exactly
+	-- one open project declares with automatic connection on — and the plugin
+	-- only follows the answer, through the same connect as the button and its
+	-- PlaceId checks. It asks when Studio loads and every few seconds while
+	-- nothing is connected, never from a playtest's DataModels, and stops for
+	-- the session once the person disconnects by hand. An app that does not
+	-- answer is not an error: it may simply not be open yet.
+	local function autoConnect()
+		if destroyed or autoConnectStopped or connecting or running or rojoRunning or not RunService:IsEdit() then
+			return
+		end
+		local answer = Runtime.hello(settings.RuntimeBaseUrl)
+		if destroyed or autoConnectStopped or connecting or running or rojoRunning or answer.status ~= "ok" then
+			return
+		end
+		knownCopy = if answer.copy ~= nil then { runtimeId = answer.runtimeId, copy = answer.copy } else nil
+		if answer.connect ~= true then
+			return
+		end
+		print(string.format("[Sandblock] Sandblock Code connects this Studio (%s)", tostring(answer.reason)))
+		connectTo(answer.runtimeId, true)
+	end
+
+	task.spawn(function()
+		while not destroyed do
+			autoConnect()
+			task.wait(Config.AutoConnectInterval)
+		end
+	end)
 
 	local function destroy()
 		if destroyed then

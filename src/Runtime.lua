@@ -23,6 +23,12 @@ type Result = {
 	place: any?,
 	projectFile: string?,
 	rojo: any?,
+	-- What `hello` adds: whether to connect, to which runtime, why, and the
+	-- copy descriptor when this Studio is a Sandblock copy.
+	connect: boolean?,
+	runtimeId: string?,
+	reason: string?,
+	copy: any?,
 	-- The service's error code, e.g. "wrong_project" or "place_not_declared".
 	code: string?,
 	message: string?,
@@ -69,6 +75,27 @@ local function requestJson(url: string, method: string, body: any?): Result
 		place = decoded and decoded.place,
 		projectFile = decoded and decoded.projectFile,
 		rojo = decoded and decoded.rojo,
+		connect = decoded and decoded.connect,
+		runtimeId = decoded and decoded.runtimeId,
+		reason = decoded and decoded.reason,
+		copy = decoded and decoded.copy,
+	}
+end
+
+-- A copy descriptor as Sandblock Code hands it out: `{ key, name, copyOf,
+-- version }`. Anything else is not trusted as a copy.
+local function readCopy(value: any): any?
+	if type(value) ~= "table" or type(value.key) ~= "string" or value.key == "" then
+		return nil
+	end
+	if type(value.copyOf) ~= "string" or value.copyOf == "" or type(value.version) ~= "number" then
+		return nil
+	end
+	return {
+		key = value.key,
+		name = if type(value.name) == "string" and value.name ~= "" then value.name else value.key,
+		copyOf = value.copyOf,
+		version = value.version,
 	}
 end
 
@@ -81,15 +108,41 @@ function Runtime.list(baseUrl: string): Result
 	return result
 end
 
+-- Asks Sandblock Code whether this Studio should connect, and to what.
+--
+-- Sandblock Code decides from the PlaceId and the place name: a copy it
+-- opened (the ticket is in the file name, which Studio uses as `game.Name`),
+-- a place it launched moments ago, or a place exactly one open project
+-- declares. The plugin only follows the answer.
+--
+-- Returns a result whose `connect` is true with a `runtimeId` (and a `copy`
+-- when `reason` is "copy"), or false.
+function Runtime.hello(baseUrl: string): Result
+	local result = requestJson(baseUrl .. "/studios/hello", "POST", { placeId = game.PlaceId, placeName = game.Name })
+	if result.status ~= "ok" then
+		return result
+	end
+	if result.connect ~= true then
+		return { status = "ok", connect = false, reason = result.reason }
+	end
+	local copy = if result.reason == "copy" then readCopy(result.copy) else nil
+	if type(result.runtimeId) ~= "string" or result.runtimeId == "" or (result.reason == "copy" and copy == nil) then
+		return { status = "error", message = "Sandblock Code returned an unexpected connection answer." }
+	end
+	return { status = "ok", connect = true, runtimeId = result.runtimeId, reason = result.reason, copy = copy }
+end
+
 -- Asks Sandblock Code to serve the place this Studio has open, with the
 -- pinned Rojo build.
 --
 -- The PlaceId is what picks the Rojo project: places of one experience can
 -- each sync their own tree, and the app refuses a place the project does not
--- declare rather than handing it the main place's.
-function Runtime.start(baseUrl: string, runtimeId: string): Result
+-- declare rather than handing it the main place's. A copy has no PlaceId of
+-- its own, so it names itself with its copy key and syncs the tree of the
+-- place it copies.
+function Runtime.start(baseUrl: string, runtimeId: string, copyKey: string?): Result
 	local url = baseUrl .. "/runtimes/" .. HttpService:UrlEncode(runtimeId) .. "/start"
-	local result = requestJson(url, "POST", { placeId = game.PlaceId })
+	local result = requestJson(url, "POST", { placeId = game.PlaceId, copy = copyKey })
 	if result.status == "ok" and (type(result.runtime) ~= "table" or type(result.rojo) ~= "table") then
 		return { status = "error", message = "Sandblock Code did not return this place's Rojo session." }
 	end
@@ -104,10 +157,12 @@ end
 -- Reports what Studio just did with this runtime so Sandblock Code can show a
 -- sync history beside its tool history. Failing to report is never worth
 -- interrupting a sync over, so the result is returned but usually ignored.
-function Runtime.report(baseUrl: string, runtimeId: string, event: any): Result
+-- A copy adds its copy key, since its PlaceId (0) names no place.
+function Runtime.report(baseUrl: string, runtimeId: string, event: any, copyKey: string?): Result
 	local payload = table.clone(event)
 	payload.place = game.Name
 	payload.placeId = game.PlaceId
+	payload.copy = copyKey
 	return requestJson(baseUrl .. "/runtimes/" .. HttpService:UrlEncode(runtimeId) .. "/events", "POST", payload)
 end
 
@@ -144,11 +199,49 @@ end
 -- would let an agent edit a place nobody approved, so the plugin refuses rather
 -- than connecting and hoping.
 --
--- Returns (state, place, message) where state is "verified", "unbound" or
--- "mismatch", and `place` is the matched declaration when verified.
-function Runtime.resolvePlace(runtime: any): (string, any?, string?)
+-- A copy is checked the same way, by what it copies: Sandblock Code recognised
+-- it, but it must still be a local file (PlaceId 0) of a place the project
+-- declares.
+--
+-- Returns (state, place, message) where state is "verified", "copy",
+-- "unbound" or "mismatch", and `place` is the matched declaration when
+-- verified, or the copy as this Studio holds it.
+function Runtime.resolvePlace(runtime: any, copy: any?): (string, any?, string?)
 	local places = declaredPlaces(runtime)
 	local current = game.PlaceId
+	if copy ~= nil then
+		if current ~= 0 then
+			return "mismatch",
+				nil,
+				string.format(
+					"This Studio has place %d open, so it cannot be a Sandblock copy. Reopen the copy from Sandblock Code.",
+					current
+				)
+		end
+		for _, place in places do
+			if place.key == copy.copyOf then
+				return "copy",
+					{
+						key = copy.key,
+						name = copy.name,
+						main = false,
+						copyOf = copy.copyOf,
+						version = copy.version,
+						-- A copy syncs the Rojo project of the place it copies.
+						projectFile = place.projectFile,
+					},
+					nil
+			end
+		end
+		return "mismatch",
+			nil,
+			string.format(
+				"This copy is of place %s, which is not one of %s's declared places: %s.",
+				tostring(copy.copyOf),
+				tostring(runtime.displayName),
+				placeSummary(places)
+			)
+	end
 	if #places == 0 then
 		return "unbound",
 			nil,

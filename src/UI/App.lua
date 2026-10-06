@@ -524,6 +524,7 @@ function App.mount(parent: Instance, options: any?)
 
 	local PLACE_LABELS = {
 		verified = { "success", "Place verified" },
+		copy = { "success", "Place copy" },
 		unbound = { "warning", "No place declared" },
 		mismatch = { "error", "Place not declared" },
 	}
@@ -534,7 +535,8 @@ function App.mount(parent: Instance, options: any?)
 	--
 	-- `place` is the declared place this Studio matched, which is also the place
 	-- the bridge will route an agent's commands to — naming it here is what
-	-- makes "which of my Studios is this?" answerable at a glance.
+	-- makes "which of my Studios is this?" answerable at a glance. A copy has
+	-- no PlaceId to match, so it names the place and version it was made from.
 	local function setProject(runtime: any, placeState: string?, placeMessage: string?, place: any?)
 		selectedRuntime = runtime
 		projectName.Text = if runtime then tostring(runtime.displayName) else "No project selected"
@@ -546,6 +548,8 @@ function App.mount(parent: Instance, options: any?)
 			local text = label[2]
 			if placeState == "verified" and place ~= nil then
 				text = string.format("%s%s", tostring(place.name), if place.main then " · main place" else "")
+			elseif placeState == "copy" and place ~= nil then
+				text = string.format("Copy of %s v%s", tostring(place.copyOf), tostring(place.version))
 			end
 			placeStatus.Set(label[1], text)
 		else

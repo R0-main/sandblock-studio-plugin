@@ -4,8 +4,8 @@ This repository owns the final Sandblock plugin installed in Roblox Studio.
 The current implementation includes the outbound MCP bridge, a Sandblock-
 branded dock widget, and a native Luau component library with an interactive
 Studio gallery. It also embeds the headless client adapter built from the
-pinned `../sandblock-rojo` fork. Approved project/runtime selection and
-automatic binding remain the next integration step.
+pinned `../sandblock-rojo` fork. It connects to approved projects, by hand or
+automatically when Sandblock Code asks it to.
 
 ## Studio UI
 
@@ -14,7 +14,7 @@ start anything. The Runtime tab is one page: the selected project and how this
 Studio place relates to it, the MCP bridge and Rojo sync rows, and a single
 **Connect** button.
 
-Connecting is project-first:
+Connecting by hand is project-first:
 
 1. **Connect** with no project selected opens the picker.
 2. The picker lists the projects registered in Sandblock Code, most relevant
@@ -43,6 +43,38 @@ apparently healthy connection that quietly stopped syncing is visible that way
 instead of staying green. The plugin also reports each connect, patch, and
 disconnect to Sandblock Code, which keeps the project's sync history beside its
 tool history.
+
+### Automatic connection
+
+**Current, not yet validated in Studio.** When Studio loads, and every ten
+seconds while nothing is connected, the plugin asks Sandblock Code whether this
+Studio should connect (`POST /studios/hello` on the runtime service, with the
+`PlaceId` and `game.Name`). Sandblock Code decides — a place copy it opened, a
+place it launched moments ago, or a place exactly one open project declares with
+automatic connection on — and the plugin runs the same connect as the button,
+with the same `PlaceId` checks. The rules live in the workspace's
+`docs/STUDIO_LAUNCH_AND_PLACE_COPIES.md`.
+
+- An app that does not answer is not an error; the plugin asks again later.
+- **Disconnect** by hand stops automatic connection for the rest of the Studio
+  session; **Connect** or choosing a project turns it back on. A place another
+  Studio already holds, or a connect Sandblock Code refuses after offering it,
+  also stops it until a click, rather than retrying the same refusal.
+- Playtest DataModels never connect by themselves.
+
+A **place copy** is a disposable local file of a declared place at an exact
+version, opened by Sandblock Code for an agent. It has no `PlaceId`, so Sandblock
+Code recognises it by its file name. The plugin then claims it on the bridge by
+its copy key, with the place and version it copies, starts the Rojo session of
+the place it copies, reports its sync events with the copy key, and shows
+**Copy of `<place>` v`<version>`** instead of a missing `PlaceId`. A copy is
+never remembered as the selected project.
+
+A local file has no Roblox owner, so package commands addressed to a copy carry
+the owner to publish as (`creator`, taken from the other side of the transfer);
+a place with an owner ignores it. An insertion given a `markId` marks the
+inserted model with a `SandblockTransferId` attribute, which the transfer's
+setup script uses to find it.
 
 The chosen project is remembered as an opaque runtime id, so reconnecting later
 is one click. Before anything starts, the plugin matches the open place against
