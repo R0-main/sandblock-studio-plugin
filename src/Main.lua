@@ -125,6 +125,10 @@ function Main.start(pluginObject: Plugin, options: any?)
 	-- runtime it belongs to. A copy is a local file with PlaceId 0; only its
 	-- file name, which Studio uses as `game.Name`, tells it apart.
 	local knownCopy: any = nil
+	-- The scratch place this Studio is, once Sandblock Code has recognised it.
+	-- A scratch place belongs to no project: its runtime id is the bridge scope
+	-- only Sandblock Code's scratch endpoint reaches.
+	local knownScratch: any = nil
 
 	-- The key a copy reports itself with; nil while this Studio holds a real
 	-- place, which its PlaceId already names.
@@ -159,7 +163,8 @@ function Main.start(pluginObject: Plugin, options: any?)
 	-- reason to interrupt a sync.
 	local function reportEvent(kind: string, payload: any?)
 		local runtimeId = selection and selection.runtimeId
-		if runtimeId == nil then
+		-- A scratch place has no project to report to.
+		if runtimeId == nil or (heldPlace ~= nil and heldPlace.scratch) then
 			return
 		end
 		local event = if payload then table.clone(payload) else {}
@@ -226,6 +231,11 @@ function Main.start(pluginObject: Plugin, options: any?)
 	local function claimPlace(place: any): any
 		if place == nil then
 			return nil
+		end
+		if place.scratch then
+			-- A scratch place has no PlaceId and copies nothing: its key is all
+			-- the bridge knows it by, inside the scratch scope.
+			return { key = place.key, name = place.name, main = false, scratch = true }
 		end
 		if place.copyOf ~= nil then
 			-- A copy has no PlaceId: the bridge knows it by its key, and by the
@@ -647,6 +657,24 @@ function Main.start(pluginObject: Plugin, options: any?)
 		end)
 	end
 
+	-- Connects this Studio as the scratch place Sandblock Code opened. There is
+	-- no project to remember, no declared place to validate against, and no Rojo
+	-- to start: only the bridge connects, under the scratch runtime id.
+	local function connectScratch(runtimeId: string, scratch: any)
+		if destroyed or connecting then
+			return
+		end
+		connectGeneration += 1
+		selection = { runtimeId = runtimeId, displayName = "Scratch place" }
+		heldPlace = { key = scratch.key, name = scratch.name, main = false, scratch = true }
+		declaredPlaces = {}
+		rojoUrl = nil
+		rojoProjectFile = nil
+		panel.App.SetProject(selection, "scratch", nil, heldPlace)
+		print(string.format("[Sandblock] %s connects as a scratch place", tostring(scratch.key)))
+		setRunning(true)
+	end
+
 	function selectRuntime(runtime: any)
 		if destroyed or runtime == nil then
 			return
@@ -673,6 +701,11 @@ function Main.start(pluginObject: Plugin, options: any?)
 			rojoProjectFile = nil
 			setRunning(false)
 			setRojoRunning(false)
+			return
+		end
+		-- A scratch place reconnects as itself, never through a project.
+		if knownScratch ~= nil then
+			connectScratch(knownScratch.runtimeId, knownScratch.scratch)
 			return
 		end
 		-- Connecting always goes through a project: without one there is nothing
@@ -738,10 +771,15 @@ function Main.start(pluginObject: Plugin, options: any?)
 			return
 		end
 		knownCopy = if answer.copy ~= nil then { runtimeId = answer.runtimeId, copy = answer.copy } else nil
+		knownScratch = if answer.scratch ~= nil then { runtimeId = answer.runtimeId, scratch = answer.scratch } else nil
 		if answer.connect ~= true then
 			return
 		end
 		print(string.format("[Sandblock] Sandblock Code connects this Studio (%s)", tostring(answer.reason)))
+		if knownScratch ~= nil then
+			connectScratch(knownScratch.runtimeId, knownScratch.scratch)
+			return
+		end
 		connectTo(answer.runtimeId, true)
 	end
 

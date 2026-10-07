@@ -525,6 +525,7 @@ function App.mount(parent: Instance, options: any?)
 	local PLACE_LABELS = {
 		verified = { "success", "Place verified" },
 		copy = { "success", "Place copy" },
+		scratch = { "success", "Scratch place" },
 		unbound = { "warning", "No place declared" },
 		mismatch = { "error", "Place not declared" },
 	}
@@ -550,6 +551,8 @@ function App.mount(parent: Instance, options: any?)
 				text = string.format("%s%s", tostring(place.name), if place.main then " · main place" else "")
 			elseif placeState == "copy" and place ~= nil then
 				text = string.format("Copy of %s v%s", tostring(place.copyOf), tostring(place.version))
+			elseif placeState == "scratch" and place ~= nil then
+				text = string.format("%s · no project", tostring(place.name))
 			end
 			placeStatus.Set(label[1], text)
 		else

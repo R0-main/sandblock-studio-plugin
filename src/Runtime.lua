@@ -41,11 +41,12 @@ type Result = {
 	projectFile: string?,
 	rojo: any?,
 	-- What `hello` adds: whether to connect, to which runtime, why, and the
-	-- copy descriptor when this Studio is a Sandblock copy.
+	-- copy or scratch place descriptor when this Studio is one.
 	connect: boolean?,
 	runtimeId: string?,
 	reason: string?,
 	copy: any?,
+	scratch: any?,
 	-- The service's error code, e.g. "wrong_project" or "place_not_declared".
 	code: string?,
 	message: string?,
@@ -96,6 +97,7 @@ local function requestJson(url: string, method: string, body: any?): Result
 		runtimeId = decoded and decoded.runtimeId,
 		reason = decoded and decoded.reason,
 		copy = decoded and decoded.copy,
+		scratch = decoded and decoded.scratch,
 	}
 end
 
@@ -116,6 +118,18 @@ local function readCopy(value: any): any?
 	}
 end
 
+-- A scratch place descriptor as Sandblock Code hands it out: `{ key, name }`.
+-- A scratch place belongs to no project; its key is all that names it.
+local function readScratch(value: any): any?
+	if type(value) ~= "table" or type(value.key) ~= "string" or value.key == "" then
+		return nil
+	end
+	return {
+		key = value.key,
+		name = if type(value.name) == "string" and value.name ~= "" then value.name else value.key,
+	}
+end
+
 -- Lists the projects registered in Sandblock Code, most relevant first.
 function Runtime.list(baseUrl: string): Result
 	local result = requestJson(baseUrl .. "/runtimes", "GET")
@@ -127,13 +141,15 @@ end
 
 -- Asks Sandblock Code whether this Studio should connect, and to what.
 --
--- Sandblock Code decides from the PlaceId and the place name: a copy it
--- opened (the ticket is in the file name, which Studio uses as `game.Name`),
--- a place it launched moments ago, or a place exactly one open project
--- declares. The plugin only follows the answer.
+-- Sandblock Code decides from the PlaceId and the place name: a copy or a
+-- scratch place it opened (the ticket is in the file name, which Studio uses
+-- as `game.Name`), a place it launched moments ago, or a place exactly one
+-- open project declares. The plugin only follows the answer.
 --
 -- Returns a result whose `connect` is true with a `runtimeId` (and a `copy`
--- when `reason` is "copy"), or false.
+-- when `reason` is "copy", a `scratch` when it is "scratch"), or false. A
+-- scratch place's `runtimeId` names no project: it is the bridge scope that
+-- only Sandblock Code's scratch endpoint reaches.
 function Runtime.hello(baseUrl: string): Result
 	local placeName = Runtime.copyFile() or game.Name
 	local result = requestJson(baseUrl .. "/studios/hello", "POST", { placeId = game.PlaceId, placeName = placeName })
@@ -144,13 +160,26 @@ function Runtime.hello(baseUrl: string): Result
 		return { status = "ok", connect = false, reason = result.reason }
 	end
 	local copy = if result.reason == "copy" then readCopy(result.copy) else nil
-	if type(result.runtimeId) ~= "string" or result.runtimeId == "" or (result.reason == "copy" and copy == nil) then
+	local scratch = if result.reason == "scratch" then readScratch(result.scratch) else nil
+	if
+		type(result.runtimeId) ~= "string"
+		or result.runtimeId == ""
+		or (result.reason == "copy" and copy == nil)
+		or (result.reason == "scratch" and scratch == nil)
+	then
 		return { status = "error", message = "Sandblock Code returned an unexpected connection answer." }
 	end
 	if copy ~= nil then
 		pcall(game.SetAttribute, game, COPY_FILE_ATTRIBUTE, placeName)
 	end
-	return { status = "ok", connect = true, runtimeId = result.runtimeId, reason = result.reason, copy = copy }
+	return {
+		status = "ok",
+		connect = true,
+		runtimeId = result.runtimeId,
+		reason = result.reason,
+		copy = copy,
+		scratch = scratch,
+	}
 end
 
 -- Asks Sandblock Code to serve the place this Studio has open, with the
